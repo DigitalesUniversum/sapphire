@@ -23,7 +23,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "run_command",
-            "description": "Run a shell command locally. Long output truncated.",
+            "description": "Run a shell command locally. Long output truncated (default 6000 chars, override with max_output).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -34,6 +34,10 @@ TOOLS = [
                     "timeout": {
                         "type": "integer",
                         "description": "Seconds (default 30)"
+                    },
+                    "max_output": {
+                        "type": "integer",
+                        "description": "Override output truncation limit in chars for this call. Omit to use plugin default."
                     }
                 },
                 "required": ["command"]
@@ -95,7 +99,7 @@ def _check_blacklist(command):
     return None
 
 
-def _run_local(command, timeout):
+def _run_local(command, timeout, max_output=None):
     """Run command locally via subprocess."""
     logger.info(f"LOCAL $ {command[:100]}")
     try:
@@ -123,7 +127,10 @@ def _run_local(command, timeout):
             parts.append(f"STDERR: {stderr}")
         full_output = '\n'.join(parts) if parts else '(no output)'
 
-        limit = _get_settings().get('output_limit', DEFAULT_OUTPUT_LIMIT)
+        if max_output is not None:
+            limit = max_output
+        else:
+            limit = _get_settings().get('output_limit', DEFAULT_OUTPUT_LIMIT)
         truncated = len(full_output) > limit
         if truncated:
             full_output = full_output[:limit]
@@ -149,6 +156,7 @@ def execute(function_name, arguments, config):
             if not command:
                 return "command is required.", False
             timeout = arguments.get('timeout', 30)
+            max_output = arguments.get('max_output')
 
             blocked = _check_blacklist(command)
             if blocked:
@@ -157,7 +165,7 @@ def execute(function_name, arguments, config):
 
             max_timeout = _get_settings().get('max_timeout', DEFAULT_MAX_TIMEOUT)
             timeout = min(max(5, timeout), max_timeout)
-            return _run_local(command, timeout)
+            return _run_local(command, timeout, max_output=max_output)
         else:
             return f"Unknown function '{function_name}'.", False
     except Exception as e:
