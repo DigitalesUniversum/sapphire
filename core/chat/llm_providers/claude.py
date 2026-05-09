@@ -222,9 +222,17 @@ class ClaudeProvider(BaseProvider):
                 system_prompt, dynamic_system, cache_enabled, cache_system_prompt, cache_ttl
             )
 
+        # Phase 1.5 — extend cache through history. System+tools already
+        # caches; this adds a cache_control marker on the last history
+        # message, which makes the cached prefix cover the full conversation
+        # except the ghost + new user input. ~80% input cost reduction on
+        # long chats. 2026-05-08.
+        if cache_enabled:
+            self._apply_history_cache_control(claude_messages, cache_ttl)
+
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
-        
+
         # Add extended thinking if enabled (unless explicitly disabled)
         # Read from provider config first, fall back to global config
         thinking_enabled = self.config.get('thinking_enabled')
@@ -312,9 +320,14 @@ class ClaudeProvider(BaseProvider):
                 system_prompt, dynamic_system, cache_enabled, cache_system_prompt, cache_ttl
             )
 
+        # Phase 1.5 — see chat_completion() for rationale. Extends cache
+        # through full history; only ghost+new-user is fresh.
+        if cache_enabled:
+            self._apply_history_cache_control(claude_messages, cache_ttl)
+
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
-        
+
         # Add extended thinking if enabled (unless explicitly disabled for this request)
         # Read from provider config first, fall back to global config
         thinking_enabled = self.config.get('thinking_enabled')
@@ -619,6 +632,60 @@ class ClaudeProvider(BaseProvider):
         # Remap foreign IDs deterministically — same input always gives same output
         h = hashlib.sha256(tool_id.encode()).hexdigest()[:24]
         return f"toolu_{h}"
+
+    def _apply_history_cache_control(self, claude_messages: list, cache_ttl: str) -> None:
+        """Place a cache_control marker on the last message before ghost/new-user.
+
+        Phase 1.5 of cache work (2026-05-08). System prompt + tools are
+        already cached via separate markers in `_build_system_blocks` and
+        `_convert_tools`. This method extends the cached prefix THROUGH the
+        conversation history — only the ghost message + new user input are
+        fresh tokens per turn.
+
+        Detection: the new user message is always the LAST message. The
+        ghost message (when present) is a user-role string starting with
+        the envelope header from `core/ghost_messages.py`. If we find one,
+        place the cache marker on the message BEFORE it (the actual last
+        history turn). Otherwise place it on the second-to-last (which is
+        then the last history turn directly).
+
+        Anthropic auto-skips cache for blocks below the model's minimum
+        cacheable size (~1024 tokens), so short histories silently no-op
+        rather than paying the 1.25x cache-write premium for nothing.
+        """
+        if not claude_messages or len(claude_messages) < 2:
+            return  # too short for any cacheable history
+
+        # Detect the ghost envelope at second-to-last position
+        second_to_last = claude_messages[-2]
+        is_ghost = (
+            second_to_last.get("role") == "user"
+            and isinstance(second_to_last.get("content"), str)
+            and second_to_last["content"].startswith("[Operator metadata for assistant")
+        )
+        cache_idx = -3 if is_ghost else -2
+        if abs(cache_idx) > len(claude_messages):
+            return  # nothing to cache (e.g., only ghost + new user)
+
+        cache_control = {"type": "ephemeral"}
+        if cache_ttl == '1h':
+            cache_control["ttl"] = "1h"
+
+        target = claude_messages[cache_idx]
+        content = target.get("content")
+        if isinstance(content, str):
+            # Wrap string content in a single text block with cache_control.
+            target["content"] = [{
+                "type": "text",
+                "text": content,
+                "cache_control": cache_control,
+            }]
+        elif isinstance(content, list) and content:
+            # Mark the last block. Copy the dict so we don't mutate any
+            # block object that might be shared across requests.
+            last_block = dict(content[-1])
+            last_block["cache_control"] = cache_control
+            content[-1] = last_block
 
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> tuple:
         """
