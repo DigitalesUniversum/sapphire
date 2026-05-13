@@ -7,9 +7,13 @@ import { createCameraOrbitSystem } from './camera-orbits.js';
 import { createPlayerController } from './player-controller.js';
 import { createMissileCommand } from './missile-command.js';
 
-const THREE_CDN = 'https://esm.sh/three@0.170.0';
-const GLTF_CDN = 'https://esm.sh/three@0.170.0/addons/loaders/GLTFLoader.js';
-const ORBIT_CDN = 'https://esm.sh/three@0.170.0/addons/controls/OrbitControls.js';
+// Routed through Sapphire's /cdn-cache/ proxy — first request fetches from
+// esm.sh and saves to user/cdn_cache/, subsequent serves from disk. ?bundle
+// inlines all internal deps so the cached file is self-contained (otherwise
+// internal esm.sh imports would still hit the CDN). 2026-05-13.
+const THREE_CDN = '/cdn-cache/esm.sh/three@0.170.0?bundle&target=es2022';
+const GLTF_CDN  = '/cdn-cache/esm.sh/three@0.170.0/addons/loaders/GLTFLoader.js?bundle&target=es2022&external=three';
+const ORBIT_CDN = '/cdn-cache/esm.sh/three@0.170.0/addons/controls/OrbitControls.js?bundle&target=es2022&external=three';
 const CROSSFADE_MS = 400;
 
 // Hardcoded fallback defaults (used when no config exists)

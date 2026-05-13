@@ -53,6 +53,14 @@ def _build_import_map():
         rel = js_file.relative_to(STATIC_DIR).as_posix()
         url = f"/static/{rel}"
         imports[url] = f"{url}?v={BOOT_VERSION}"
+
+    # Bare-specifier mappings for CDN libraries used via /cdn-cache/. Lets
+    # esm.sh's `?external=three` addons (GLTFLoader, OrbitControls) resolve
+    # `import * from "three"` to the cached three.js — sharing one module
+    # instance across all importers so instanceof checks work across them.
+    # 2026-05-13.
+    imports["three"] = "/cdn-cache/esm.sh/three@0.170.0?bundle&target=es2022"
+
     return json.dumps({"imports": imports})
 
 
@@ -144,6 +152,112 @@ async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)
             content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
             return FileResponse(file_path, media_type=content_type)
     return JSONResponse({"error": "Not found"}, status_code=404)
+
+# ── CDN cache proxy ─────────────────────────────────────────────────────────
+# Plugins that need browser-side libraries (three.js, etc.) can import via
+# /cdn-cache/<host>/<path> instead of hitting esm.sh/jsdelivr/unpkg directly.
+# First request fetches + caches to user/cdn_cache/<sha256>; subsequent
+# requests serve from disk. Cache is permanent — CDN URLs are version-pinned
+# (e.g. three@0.170.0), so stale isn't a concern. Allowlist prevents the
+# endpoint from becoming an open relay. Added 2026-05-13 — avatar was the
+# only CDN consumer; drives' Chart.js dep was removed earlier today.
+
+CDN_HOST_ALLOWLIST = {"esm.sh", "cdn.jsdelivr.net", "unpkg.com"}
+CDN_CACHE_DIR = (PROJECT_ROOT / "user" / "cdn_cache").resolve()
+CDN_FETCH_TIMEOUT = 30.0
+
+# Regex: match quoted root-relative module paths inside JS bodies that look
+# like CDN package references — paths that start with `/` and contain
+# `@version` somewhere. Conservative — won't rewrite arbitrary `/foo/bar`
+# strings, only paths with the @digit signature CDNs use for pinned versions.
+import re as _re
+_CDN_PATH_REWRITE_RE = _re.compile(
+    r'''(["'])(/[^"'\s]*?@\d[^"'\s]*?)(["'])'''
+)
+
+
+def _rewrite_cdn_paths(body_bytes: bytes, host: str) -> bytes:
+    """Rewrite root-relative paths in JS module responses to flow back through
+    /cdn-cache/<host>/. esm.sh's `?bundle` output references internal files
+    via root-relative imports (e.g. `from "/three@0.170.0/es2022/three.bundle.mjs"`)
+    which would otherwise resolve against the document origin and 404.
+    """
+    try:
+        body_str = body_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return body_bytes  # binary — don't touch
+    rewritten = _CDN_PATH_REWRITE_RE.sub(
+        lambda m: f'{m.group(1)}/cdn-cache/{host}{m.group(2)}{m.group(3)}',
+        body_str,
+    )
+    return rewritten.encode("utf-8")
+
+
+@app.get("/cdn-cache/{path:path}")
+async def serve_cdn_cache(request: Request, path: str, _=Depends(require_login)):
+    """Local cache proxy for whitelisted CDN libraries.
+
+    Path: <host>/<remaining-url-path>, query string preserved.
+    Cache key: SHA256 of full upstream URL (including query).
+    JS responses get root-relative module paths rewritten so subimports
+    flow back through us — necessary for esm.sh's bundle format.
+    """
+    import hashlib as _hashlib
+    from fastapi.responses import Response as _Response
+
+    if "/" not in path:
+        host, rest = path, ""
+    else:
+        host, rest = path.split("/", 1)
+    if host not in CDN_HOST_ALLOWLIST:
+        raise HTTPException(status_code=400, detail=f"host not allowed: {host}")
+
+    query = request.url.query or ""
+    upstream_url = f"https://{host}/{rest}"
+    if query:
+        upstream_url = f"{upstream_url}?{query}"
+
+    key = _hashlib.sha256(upstream_url.encode("utf-8")).hexdigest()
+    cache_file = CDN_CACHE_DIR / key
+    meta_file = CDN_CACHE_DIR / f"{key}.ct"
+
+    # Cache hit
+    if cache_file.exists() and meta_file.exists():
+        try:
+            content_type = meta_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            content_type = "application/octet-stream"
+        return _Response(content=cache_file.read_bytes(),
+                         media_type=content_type or "application/octet-stream")
+
+    # Cache miss — fetch upstream
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=CDN_FETCH_TIMEOUT) as client:
+            r = await client.get(upstream_url, follow_redirects=True)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502,
+                                detail=f"upstream {host} returned {r.status_code}")
+        content = r.content
+        content_type = r.headers.get("content-type", "application/octet-stream")
+
+        # Rewrite root-relative module paths in JS responses so subimports
+        # flow back through the proxy.
+        if "javascript" in content_type.lower() or "ecmascript" in content_type.lower():
+            content = _rewrite_cdn_paths(content, host)
+
+        # Atomic write
+        CDN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = cache_file.with_suffix(".tmp")
+        tmp.write_bytes(content)
+        tmp.replace(cache_file)
+        meta_file.write_text(content_type, encoding="utf-8")
+        return _Response(content=content, media_type=content_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"cdn fetch failed: {e}")
+
 
 # Avatar assets (user/avatar/)
 @app.get("/api/avatar/{filename}")
