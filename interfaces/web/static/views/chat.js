@@ -520,19 +520,27 @@ async function _loadPluginAccordions(container, init) {
         section.appendChild(content);
         slot.appendChild(section);
 
+        // Sequence: HTML must land in content.innerHTML BEFORE the script's
+        // init() runs — init typically queries content for DOM nodes that
+        // come from the HTML. On first page load this races by luck (script
+        // import is slower than HTML fetch); on revisit the module is cached
+        // so import() returns instantly, beating the HTML, and init bails
+        // out finding nothing. Avatar disappearing after tab-switch root
+        // cause. 2026-05-13.
+        let htmlReady = Promise.resolve();
         if (acc.content) {
-            pending.push(
-                fetch(`/plugin-web/${plugin.name}/${acc.content}`)
-                    .then(r => r.ok ? r.text() : Promise.reject())
-                    .then(html => { content.innerHTML = html; })
-                    .catch(() => {
-                        content.innerHTML = `<div class="sb-field" style="color:var(--error)">Failed to load</div>`;
-                    })
-            );
+            htmlReady = fetch(`/plugin-web/${plugin.name}/${acc.content}`)
+                .then(r => r.ok ? r.text() : Promise.reject())
+                .then(html => { content.innerHTML = html; })
+                .catch(() => {
+                    content.innerHTML = `<div class="sb-field" style="color:var(--error)">Failed to load</div>`;
+                });
+            pending.push(htmlReady);
         }
         if (acc.script) {
             pending.push(
-                import(`/plugin-web/${plugin.name}/${acc.script}`)
+                htmlReady
+                    .then(() => import(`/plugin-web/${plugin.name}/${acc.script}`))
                     .then(mod => { if (mod.init) mod.init(content, plugin.name); })
                     .catch(e => console.warn(`[SIDEBAR] Failed to load accordion script for ${plugin.name}:`, e))
             );

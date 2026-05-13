@@ -11,7 +11,7 @@
     "hooks/prompt_inject.py": "sha256:9c614020a86b17ebb6cd39e515e6a249a478d78e691b029300b943185ed94568",
     "plugin.json": "sha256:21292cf8a11a3cf222d5f4af72f9e24e1a52b3777502b5d958fcb4587e96a69e",
     "routes/api.py": "sha256:b621e3f63c33f1400268bd16e5a1ed711135830a8f8562c6a2bcbd4c8c305b95",
-    "web/camera-orbits.js": "sha256:7e3729c92e78a56c9d857726af2c0604caa92899d80a9779f76d9502c928df9d",
+    "web/camera-orbits.js": "sha256:9e401ad6f7207a805a5e507374788a2b1b5c444405a9303a43a97983851f87e7",
     "web/environment.js": "sha256:591e515585034d671f849bec899e70b01426fb7ea01e6a4085da4a383e8eaf99",
     "web/index.js": "sha256:faae1e3a3d76c07667bf3463fd2fc260bc27c8918501e3b1d543e6de64502447",
     "web/location-loader.js": "sha256:44e5ff7c32326f83a18e0a66469711960844bc1e6d27d5345b689750fb8e0206",
@@ -23,7 +23,7 @@
     "web/objects.js": "sha256:e2cf8b8267153d7a2a9a7c1aac843af391731c01d2d889bf69b8bf048f5a1775",
     "web/player-controller.js": "sha256:6df8289350f01f185f7c8c4d9e39f9d762b5aa05de367ed3deb39e6c9b4d8450",
     "web/sidebar.html": "sha256:c0d25cc097f997c3413abd941e6bbbde238cb6c65e35a0d19885d75b40fc5e25",
-    "web/sidebar.js": "sha256:0d81fb7633c5e43bebbfb1a8e8aa49010eb219b29401cea1a05c2a950d6ba444"
+    "web/sidebar.js": "sha256:0b7d5442617121c686615929e4255d7465278567f64990bd1f366f76691b853b"
   },
-  "signature": "bMFODQkOfSzv97Ga1L3UaQb60FSbSPC3cn8x8zU5PTSDEjW1Jbm6ebC9g5xRsE3Hb3yiw975pB4JjUJmXOijCA=="
+  "signature": "Q9Y3uvH/hgYG2Bq9Rqz55874/DngNxzkB4KimTCjh18G5EemVzWkeJkzG19xLOW8nYJl160pe4eoC5IAnGf8CQ=="
 }

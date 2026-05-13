@@ -146,7 +146,6 @@ export function createCameraOrbitSystem(camera, controls, THREE) {
             // User took over — stop orbiting, blend out
             active = false;
             _blendFactor = 0;
-            _idleTime = 0;
         }
     };
 

@@ -230,11 +230,39 @@ async def serve_cdn_cache(request: Request, path: str, _=Depends(require_login))
         return _Response(content=cache_file.read_bytes(),
                          media_type=content_type or "application/octet-stream")
 
-    # Cache miss — fetch upstream
+    # Cache miss — fetch upstream. SSRF prevention: don't follow redirects
+    # blindly; resolve each hop manually so we can re-validate the target
+    # host against the allowlist. A compromised or sloppily-configured CDN
+    # could otherwise redirect to 127.0.0.1, metadata endpoints, or internal
+    # services running on the same VPS. Hop cap = 5 (sane). 2026-05-13.
     try:
         import httpx as _httpx
+        from urllib.parse import urljoin, urlparse
+
+        current_url = upstream_url
+        hops = 0
         async with _httpx.AsyncClient(timeout=CDN_FETCH_TIMEOUT) as client:
-            r = await client.get(upstream_url, follow_redirects=True)
+            while True:
+                r = await client.get(current_url, follow_redirects=False)
+                if r.status_code in (301, 302, 303, 307, 308):
+                    if hops >= 5:
+                        raise HTTPException(status_code=502,
+                                            detail="cdn redirect chain too long")
+                    location = r.headers.get("location", "")
+                    if not location:
+                        break
+                    next_url = urljoin(current_url, location)
+                    next_host = urlparse(next_url).hostname or ""
+                    if next_host not in CDN_HOST_ALLOWLIST:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"cdn redirect to disallowed host: {next_host}",
+                        )
+                    current_url = next_url
+                    hops += 1
+                    continue
+                break
+
         if r.status_code != 200:
             raise HTTPException(status_code=502,
                                 detail=f"upstream {host} returned {r.status_code}")

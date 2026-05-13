@@ -2099,4 +2099,12 @@ async def plugin_route_dispatch(plugin_name: str, path: str, request: Request):
 
     if isinstance(response_data, Response):
         return response_data
+    # Tuple convention — handler returns (body_dict, status_code). Without
+    # this unpack, FastAPI serialized as a JSON array with HTTP 200; every
+    # plugin route returning (error_dict, 4xx) silently looked like success
+    # to the frontend. 2026-05-13.
+    if (isinstance(response_data, tuple) and len(response_data) == 2
+            and isinstance(response_data[1], int)):
+        body, status_code = response_data
+        return JSONResponse(content=body, status_code=status_code)
     return response_data

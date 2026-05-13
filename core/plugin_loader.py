@@ -793,6 +793,24 @@ class PluginLoader:
                 import sys
                 sys.modules.pop(pkg, None)
 
+        # Evict plugin's lib/ modules from sys.modules so the next load picks
+        # up edited code instead of stale cache. Without this, hook files
+        # that do `from lib import X` get the old X even after re-exec
+        # because Python caches imports globally. 2026-05-13.
+        import sys as _sys
+        plugin_path = self._plugins.get(name, {}).get("path")
+        if plugin_path:
+            plugin_path_str = str(plugin_path)
+            evict = [
+                mod_name for mod_name, mod in list(_sys.modules.items())
+                if getattr(mod, "__file__", None)
+                and str(mod.__file__).startswith(plugin_path_str)
+            ]
+            for mod_name in evict:
+                _sys.modules.pop(mod_name, None)
+            if evict:
+                logger.info(f"[PLUGINS] Evicted {len(evict)} cached module(s) for {name}: {evict}")
+
         # Finalize state under lock
         with self._lock:
             if name in self._plugins:

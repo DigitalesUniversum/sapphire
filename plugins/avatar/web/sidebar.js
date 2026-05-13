@@ -827,10 +827,25 @@ export async function init(container) {
         _cleanup = null;
     };
 
+    // Debounced disposal — a brief detach during framework DOM rebuild
+    // (sidebar accordion refresh, view switch) should NOT permanently dispose
+    // the WebGL context. Only treat detachment as final after 1s. Previously
+    // any momentary detach killed the avatar irreversibly. 2026-05-13.
+    let _detachTimer = null;
     const observer = new MutationObserver(() => {
         if (!document.contains(canvas)) {
-            if (_cleanup) _cleanup();
-            observer.disconnect();
+            if (!_detachTimer) {
+                _detachTimer = setTimeout(() => {
+                    _detachTimer = null;
+                    if (!document.contains(canvas)) {
+                        if (_cleanup) _cleanup();
+                        observer.disconnect();
+                    }
+                }, 1000);
+            }
+        } else if (_detachTimer) {
+            clearTimeout(_detachTimer);
+            _detachTimer = null;
         }
     });
     observer.observe(container.parentElement || document.body, { childList: true, subtree: true });
