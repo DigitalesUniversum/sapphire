@@ -48,9 +48,13 @@ const tabConfig = {
 function renderVADSection(ctx) {
     if (window.__managed) return '';   // hosted/Docker — no local mic
 
+    // NOTE: no data-key on the checkbox — it's a UI control that maps
+    // boolean to the string setting STT_VAD_BACKEND via the change handler.
+    // If we put data-key here, the settings save machinery would scoop it
+    // up as a bool and overwrite our string with `true`/`false`. 2026-05-16.
     const siloreroCheckboxHtml = `
         <div class="settings-field" style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-            <input type="checkbox" id="stt-silero-toggle" data-key="STT_VAD_BACKEND" style="width:auto;margin:0">
+            <input type="checkbox" id="stt-silero-toggle" style="width:auto;margin:0">
             <label for="stt-silero-toggle" style="margin:0;cursor:pointer">
                 <strong>Use Silero VAD</strong> (recommended — ML-based, robust to noise)
             </label>
@@ -93,15 +97,22 @@ function renderVADSection(ctx) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function updateVadStatusBadge(el) {
+async function updateVadStatusBadge(el, syncCheckbox = false) {
     const badge = el.querySelector('#vad-status-badge');
-    const checkbox = el.querySelector('#stt-silero-toggle');
     if (!badge) return;
     try {
         const resp = await fetch('/api/stt/vad-status', { credentials: 'same-origin' });
         const data = await resp.json();
-        if (checkbox) {
-            checkbox.checked = data.intent === 'silero';
+        // ONLY sync checkbox from server state on initial load. Subsequent
+        // polls update the badge text but never touch the checkbox — otherwise
+        // a user mid-edit gets their unsaved click reverted by the next poll.
+        // 2026-05-16: this was the actual cause of the "checkbox unchecks
+        // itself after I check it" bug Krem was hitting.
+        if (syncCheckbox) {
+            const checkbox = el.querySelector('#stt-silero-toggle');
+            if (checkbox) {
+                checkbox.checked = data.intent === 'silero';
+            }
         }
         let label, color;
         if (data.state === 'ready') { label = '✓ ready'; color = '#5fd17a'; }
@@ -190,13 +201,15 @@ export default {
         const cfg = _mergedConfig || tabConfig;
         attachProviderListeners(cfg, ctx, el);
 
-        // VAD-specific wiring
-        updateVadStatusBadge(el);
+        // VAD-specific wiring. Initial call syncs checkbox from server state
+        // (= last saved intent). Subsequent polls only update the badge —
+        // never the checkbox — so a user's mid-edit click can't be reverted.
+        updateVadStatusBadge(el, true);
         attachSileroCheckboxListener(ctx, el);
         attachVadTestListener(el);
         // Refresh status every 5s while user is on this tab — picks up
         // background warmup completion if user opens settings during boot
-        const refreshInterval = setInterval(() => updateVadStatusBadge(el), 5000);
+        const refreshInterval = setInterval(() => updateVadStatusBadge(el, false), 5000);
         // Stop polling when tab is removed
         const observer = new MutationObserver(() => {
             if (!document.body.contains(el)) {
