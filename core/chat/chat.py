@@ -201,6 +201,10 @@ class LLMChat:
         
         self.current_system_prompt = None
         self.function_manager = FunctionManager()
+        # Notices to surface to the user as toasts (e.g. dangling toolset
+        # detected, empty-content fallback). Populated by chat() and the
+        # streaming generator; consumed + cleared by the API route layer.
+        self.pending_notices: list = []
         
         self.tool_engine = ToolCallingEngine(self.function_manager)
 
@@ -502,7 +506,20 @@ class LLMChat:
 
             messages = self._build_base_messages(user_input)
             self.session_manager.add_user_message(user_input)
-            
+
+            # Drain any dangling-toolset state that update_enabled_functions
+            # left for us (e.g. on chat-activation). Surface as a toast on
+            # this turn's response so the user sees it the moment they engage.
+            # getattr is defensive: some tests mock function_manager without
+            # this attribute.
+            bad_ts = getattr(self.function_manager, 'last_dangling_toolset', None)
+            if bad_ts:
+                self.pending_notices.append({
+                    "message": f"Toolset '{bad_ts}' is missing — tools disabled for this chat. Fix in chat settings.",
+                    "severity": "warning",
+                })
+                self.function_manager.last_dangling_toolset = None
+
             # Set scopes for this chat context
             # Reset first to prevent bleed: when a chat's saved settings don't include
             # a newly-registered plugin scope, apply_scopes would leave the previous
@@ -520,6 +537,11 @@ class LLMChat:
             # Snapshot names for validation — prevents race if plugins reload mid-chat
             enabled_tools = self.function_manager.enabled_tools
             _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
+            # Snapshot executor map too — protects against plugin reload mid-chat
+            # yanking executors out from under in-flight tool calls. Streaming
+            # path captures this at chat_streaming.py:179; non-streaming was
+            # missing the same protection. 2026-05-16.
+            _executor_snapshot = self.function_manager.snapshot_executors()
 
             # DIAGNOSTIC: Log what tools are being sent
             enabled_names = [t['function']['name'] for t in enabled_tools] if enabled_tools else []
@@ -658,7 +680,8 @@ class LLMChat:
                         self.session_manager,
                         provider,
                         scopes=_scopes,
-                        allowed_tools=_allowed_tool_names
+                        allowed_tools=_allowed_tool_names,
+                        executor_snapshot=_executor_snapshot,
                     )
                     tool_call_count += tools_executed
 
@@ -666,9 +689,12 @@ class LLMChat:
                     if tool_images:
                         _inject_tool_images(messages, tool_images, provider)
 
-                    # Refresh tools list — tool_load may have added new tools
+                    # Refresh tools list — tool_load may have added new tools.
+                    # Also refresh executor snapshot so newly-loaded tools become
+                    # callable (and stale executors get released) on next iter.
                     enabled_tools = self.function_manager.enabled_tools
                     _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
+                    _executor_snapshot = self.function_manager.snapshot_executors()
 
                     logger.info(f"Tool execution iteration {i+1} completed")
                     continue
@@ -699,7 +725,8 @@ class LLMChat:
                             self.session_manager,
                             provider,
                             scopes=_scopes,
-                            allowed_tools=_allowed_tool_names
+                            allowed_tools=_allowed_tool_names,
+                            executor_snapshot=_executor_snapshot,
                         )
 
                         if tool_images:
@@ -709,7 +736,28 @@ class LLMChat:
                         continue
 
                 logger.info(f"No more tool calls. Final response. (Total tools: {tool_call_count})")
-                final_response_content = response_msg.content or "I have completed the requested actions."
+                # When the LLM stops without returning content, persist a short
+                # honest placeholder in chat history and surface the actionable
+                # hint as a toast. Previously substituted "I have completed the
+                # requested actions" — confident lie when the real cause was
+                # usually a tool error. 2026-05-16.
+                if response_msg.content:
+                    final_response_content = response_msg.content
+                else:
+                    final_response_content = "(no response)"
+                    if tool_call_count > 0:
+                        self.pending_notices.append({
+                            "message": (
+                                f"Generation ended without a reply after {tool_call_count} tool call(s). "
+                                f"A tool likely errored or isn't in the active toolset — check the logs, or rephrase."
+                            ),
+                            "severity": "warning",
+                        })
+                    else:
+                        self.pending_notices.append({
+                            "message": "Model returned no content. Try rephrasing or check the LLM provider settings.",
+                            "severity": "warning",
+                        })
                 
                 # Prepend force prefill if used
                 if force_prefill:

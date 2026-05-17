@@ -482,8 +482,17 @@ function debouncedSave() {
                 selected.functions = enabled;
                 selected.function_count = enabled.length;
             }
-            await enableFunctions(enabled);
-            updateScene();
+            // Only mutate the live runtime state if the user is editing the
+            // CURRENTLY ACTIVE toolset. Otherwise the user editing a different
+            // toolset would force the active runtime to "custom" with the
+            // edited function list, even though the active chat still names
+            // the original toolset on disk. Symptom: live LLM tool list
+            // diverges from what the chat settings say. 2026-05-16.
+            const isActive = currentToolset && currentToolset.name === selectedName;
+            if (isActive) {
+                await enableFunctions(enabled);
+                updateScene();
+            }
         } catch (e) {
             ui.showToast('Save failed', 'error');
         }

@@ -177,6 +177,20 @@ class StreamingChat:
             enabled_tools = self.main_chat.function_manager.enabled_tools
             _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
             _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
+
+            # Drain dangling-toolset state and surface as SSE notice (parallel
+            # to non-streaming chat.py logic). Cleared after consume so it
+            # only fires once per detection. getattr is defensive — some tests
+            # mock function_manager without this attribute.
+            bad_ts = getattr(self.main_chat.function_manager, 'last_dangling_toolset', None)
+            if bad_ts:
+                self.main_chat.function_manager.last_dangling_toolset = None
+                yield {
+                    "type": "notice",
+                    "message": f"Toolset '{bad_ts}' is missing — tools disabled for this chat. Fix in chat settings.",
+                    "severity": "warning",
+                }
+
             provider_key, provider, model_override = self.main_chat._select_provider()
             
             # Determine effective model (per-chat override or provider default)
@@ -558,8 +572,15 @@ class StreamingChat:
                         from .chat import _inject_tool_images
                         _inject_tool_images(messages, iteration_tool_images, provider)
 
-                    # Refresh tools list — tool_load may have added new tools
+                    # Refresh tools list — tool_load may have added new tools.
+                    # Also refresh the allowed_tool_names guard set and the
+                    # executor snapshot so newly-loaded tools become callable
+                    # on the next iteration. Without this, the LLM would see
+                    # new tools in tools= but execute_function would reject
+                    # them as "not in active toolset". Mirrors chat.py:680.
                     enabled_tools = self.main_chat.function_manager.enabled_tools
+                    _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
+                    _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
 
                     if self.cancel_flag:
                         break
@@ -763,8 +784,20 @@ class StreamingChat:
                 if final_content:
                     full_final = (force_prefill or "") + final_content
                 else:
-                    full_final = f"I used {tool_call_count} tools and gathered information."
+                    # Empty content after tool calls — short placeholder + toast.
+                    # Old text ("I used N tools and gathered information") was
+                    # a confident lie when tools had silently errored. Mirrors
+                    # non-streaming chat.py fix. 2026-05-16.
+                    full_final = "(no response)"
                     yield {"type": "content", "text": full_final}
+                    yield {
+                        "type": "notice",
+                        "message": (
+                            f"Generation ended without a reply after {tool_call_count} tool call(s). "
+                            f"A tool likely errored or isn't in the active toolset — check the logs, or rephrase."
+                        ),
+                        "severity": "warning",
+                    }
 
                 # post_llm hook — plugins can mutate forced-final response
                 if hook_runner.has_handlers("post_llm"):

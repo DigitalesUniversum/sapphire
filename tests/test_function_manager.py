@@ -407,8 +407,15 @@ class TestExecution:
             with patch('core.chat.function_manager.config') as mock_cfg:
                 mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0
                 result = mgr.execute_function('disabled_func', {})
-            
-            assert "not currently available" in result
+
+            # Error message must be LLM-actionable — explicitly say the tool
+            # isn't in the toolset AND tell the LLM what to do next. The old
+            # terse "not currently available" caused models to bail to empty
+            # content, hitting the canned "I have completed the requested
+            # actions" fallback (the silent-conk-out symptom). 2026-05-16.
+            assert 'disabled_func' in result
+            assert 'not in the active toolset' in result
+            assert 'respond directly to the user' in result
     
     def test_execute_function_handles_missing_executor(self):
         """Should handle case where executor is not found."""

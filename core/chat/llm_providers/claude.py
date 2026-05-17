@@ -571,6 +571,12 @@ class ClaudeProvider(BaseProvider):
         
         Claude expects tool results as user messages with tool_result content blocks.
         """
+        # Anthropic API rejects tool_result blocks with empty/whitespace content
+        # with a 400. The history-replay path (line ~790) substitutes
+        # "(empty result)" — this live path didn't, so streams died mid-turn
+        # when any tool returned an empty string. Now symmetric. 2026-05-16.
+        if not result or not str(result).strip():
+            result = "(empty result)"
         return {
             "role": "user",
             "content": [
@@ -581,7 +587,7 @@ class ClaudeProvider(BaseProvider):
                 }
             ]
         }
-    
+
     def _strip_thinking_blocks(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Strip thinking blocks from converted Claude messages.

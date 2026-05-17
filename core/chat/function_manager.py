@@ -179,6 +179,9 @@ class FunctionManager:
         self._function_module_map = {}  # function_name -> module_name (for endpoint lookups)
         # Track what was REQUESTED, not reverse-engineered
         self.current_toolset_name = "none"
+        # Set when update_enabled_functions() is called with a dangling toolset
+        # name; consumed by API layer to surface a toast, then cleared.
+        self.last_dangling_toolset = None
         
         self._load_function_modules()
         
@@ -712,6 +715,26 @@ class FunctionManager:
                 enabled_names = toolset_manager.get_toolset_functions(toolset_name)
                 logger.info(f"Ability '{toolset_name}' (toolset) requesting {len(enabled_names)} functions")
 
+            # Single-name input that's NOT a known toolset / module → it's a
+            # dangling reference (deleted toolset, plugin removed, stale chat
+            # settings). Fall back to "none" (safe-by-default) and record the
+            # bad name so the API layer can surface a toast to the user. The
+            # subsequent chat will demonstrate the failure (no tools available)
+            # if the user ignores the toast. Old behavior silently fell through
+            # to "custom" → zero tools with no signal. 2026-05-16.
+            elif len(enabled_names) == 1:
+                bad = enabled_names[0]
+                logger.warning(
+                    f"Toolset/ability '{bad}' does not exist (likely deleted or "
+                    f"a stale chat setting). Falling back to 'none' — fix the "
+                    f"chat's toolset setting to restore tool access."
+                )
+                self.last_dangling_toolset = bad
+                self.current_toolset_name = "none"
+                self._enabled_tools = []
+                logger.info(f"Fallback applied: zero tools enabled (dangling reference: {bad!r})")
+                return
+
             # Otherwise treat as direct function name list (custom)
             else:
                 self.current_toolset_name = "custom"
@@ -907,7 +930,20 @@ class FunctionManager:
         check_names = set(allowed_tools) if allowed_tools else self.get_enabled_function_names()
         if function_name not in check_names:
             logger.warning(f"Function '{function_name}' called but not enabled. Enabled: {check_names}")
-            result = f"Error: The tool '{function_name}' is not currently available."
+            # Make the error LLM-actionable. The old terse message ("not currently
+            # available") caused models to respond with empty content, which then
+            # hit the canned "I have completed the requested actions" fallback —
+            # appearing to the user as a silent conk-out. This message tells the
+            # LLM exactly what to do next. 2026-05-16.
+            sample_names = sorted(check_names)[:10] if check_names else []
+            available_hint = (
+                f" Tools available in current toolset: {sample_names}."
+                if sample_names else " No tools are currently enabled."
+            )
+            result = (
+                f"Error: '{function_name}' is not in the active toolset, so it cannot run.{available_hint} "
+                f"Either call one of the available tools, or respond directly to the user without tools."
+            )
             self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
             return result
 
@@ -958,13 +994,22 @@ class FunctionManager:
                 except (ValueError, TypeError):
                     nparams = 5  # assume full signature
                 if nparams >= 5:
-                    result, success = executor(function_name, arguments, config, plugin_settings, credentials)
+                    raw = executor(function_name, arguments, config, plugin_settings, credentials)
                 elif nparams >= 4:
-                    result, success = executor(function_name, arguments, config, plugin_settings)
+                    raw = executor(function_name, arguments, config, plugin_settings)
                 else:
-                    result, success = executor(function_name, arguments, config)
+                    raw = executor(function_name, arguments, config)
             else:
-                result, success = executor(function_name, arguments, config)
+                raw = executor(function_name, arguments, config)
+            # Plugin convention is (result, success) tuple, but user-made tools
+            # (toolmaker output, third-party plugins) often return a bare value.
+            # Don't crash with "cannot unpack non-iterable X" — that error string
+            # used to flow straight to the LLM and make it think the tool failed
+            # when it actually ran fine. Accept either shape. 2026-05-16.
+            if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], bool):
+                result, success = raw
+            else:
+                result, success = raw, True
         except Exception as e:
             logger.error(f"Error executing function {function_name}: {e}")
             result = f"Error executing {function_name}: {str(e)}"

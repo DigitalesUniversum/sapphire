@@ -79,7 +79,15 @@ async def handle_chat(request: Request, _=Depends(require_login), system=Depends
         response = await asyncio.to_thread(system.process_llm_query, data['text'], True)
     finally:
         system.web_active_dec()
-    return {"response": response}
+    # Drain any UX notices the chat run wanted to surface (dangling toolset,
+    # empty-content fallback). Notices are transient — read + clear so they
+    # don't bleed into the next turn.
+    notices = system.llm_chat.pending_notices
+    system.llm_chat.pending_notices = []
+    payload = {"response": response}
+    if notices:
+        payload["notices"] = notices
+    return payload
 
 
 @router.post("/api/chat/stream")
@@ -132,6 +140,8 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                             yield f"data: {json.dumps({'type': 'tool_end', 'id': event.get('id'), 'name': event.get('name'), 'result': event.get('result', ''), 'error': event.get('error', False)})}\n\n"
                         elif event_type == "reload":
                             yield f"data: {json.dumps({'type': 'reload'})}\n\n"
+                        elif event_type == "notice":
+                            yield f"data: {json.dumps({'type': 'notice', 'message': event.get('message', ''), 'severity': event.get('severity', 'warning')})}\n\n"
                         else:
                             yield f"data: {json.dumps(event)}\n\n"
                     else:

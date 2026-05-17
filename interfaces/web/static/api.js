@@ -142,7 +142,15 @@ const processSSEData = (data, handlers) => {
         if (onReload) onReload();
         return { shouldReturn: true };
     }
-    
+
+    if (data.type === 'notice') {
+        // Transient UX signal from backend (dangling toolset, empty-content
+        // fallback, etc). Dispatched via event-bus so any view can subscribe
+        // and call ui.showToast — keeps api.js decoupled from ui.js.
+        dispatch('chat_notice', { message: data.message || '', severity: data.severity || 'warning' });
+        return {};
+    }
+
     // Legacy chunk format
     if (data.chunk) {
         if (data.chunk.includes('<<RELOAD_PAGE>>')) {

@@ -105,6 +105,15 @@ export default {
         // backend no longer knows about and silently fall through to 'default'.
         eventBus.on('scope_changed', () => loadSidebar());
 
+        // Backend transient notices (dangling toolset detected, empty-content
+        // fallback after tool calls, etc.) — surfaced as toasts so the user
+        // sees them clearly instead of having to scan the chat for "(no
+        // response)" or chase a missing toolset in logs.
+        eventBus.on('chat_notice', (data) => {
+            if (!data?.message) return;
+            ui.showToast(data.message, data.severity || 'warning');
+        });
+
         // Refresh sidebar (incl. scope dropdowns) when a plugin is toggled.
         // Plugin scopes are only shown when the owning plugin is enabled, so a
         // toggle changes which dropdowns should be visible. Also refreshes init
