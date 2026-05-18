@@ -12,6 +12,7 @@ just orchestrates synth scheduling and event emission.
 import base64
 import concurrent.futures
 import logging
+import re
 import time
 import uuid
 from collections import deque
@@ -20,6 +21,13 @@ from typing import Callable, Optional
 import config
 from core.hooks import hook_runner, HookEvent
 from core.tts.streaming import SpeechChunker
+
+# Quick "is this worth synthesizing?" check. The Kokoro server runs its
+# own clean_text() with a strict whitelist (a-zA-Z0-9 + basic punctuation)
+# and returns 400 if the result is empty. Pre-filter to avoid the wasted
+# round-trip + the noisy error log. 2026-05-18 fix for regen-with-emoji
+# responses that were 400ing Kokoro.
+_HAS_SPEECH_RE = re.compile(r"[a-zA-Z0-9]")
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +267,18 @@ class StreamingTTSPump:
         if ev and ev.skip_tts:
             logger.debug(f"[TTS-STREAM] Plugin skipped chunk {chunk['index']} via tts_chunk_text")
             return
+        # Skip chunks that Kokoro will reject (no a-zA-Z0-9 = empty after
+        # its whitelist filter = HTTP 400). Common case: chunks that are
+        # pure emoji, unicode-only, or all-punctuation. We strip in
+        # _clean_piece but markup-free emoji slips through. Skip silently
+        # so the LLM's emoji-only sentences just don't get spoken (which
+        # is what the user would expect anyway).
+        if not _HAS_SPEECH_RE.search(text_to_synth or ""):
+            logger.info(
+                f"[TTS-STREAM] Skipping chunk {chunk['index']} — no speakable "
+                f"chars (text={text_to_synth!r:.60})"
+            )
+            return
         meta = {
             "index": chunk["index"],
             "boundary": chunk["boundary"],
@@ -267,6 +287,10 @@ class StreamingTTSPump:
         }
         voice = getattr(self.tts, "voice_name", None) or "af_heart"
         speed = getattr(self.tts, "speed", None) or 1.0
+        logger.info(
+            f"[TTS-STREAM] submit chunk {chunk['index']} "
+            f"({chunk['boundary']}, {len(text_to_synth)} chars): {text_to_synth!r:.80}"
+        )
         fut = self._executor().submit(self._synth, text_to_synth, voice, speed)
         self.pending.append((fut, meta))
 
@@ -297,8 +321,9 @@ class StreamingTTSPump:
 
     def _build_chunk_event(self, audio_bytes, meta: dict):
         """Fire tts_chunk_audio hook (mutable bytes), then build the SSE
-        event dict. Returns None when audio is empty or a plugin nulls it."""
-        if not audio_bytes:
+        event dict. Returns None when audio is empty, non-bytes (e.g. a
+        misbehaving provider returned junk), or a plugin nulls it."""
+        if not audio_bytes or not isinstance(audio_bytes, (bytes, bytearray)):
             return None
         content_type = getattr(self.provider, "audio_content_type", "audio/ogg")
         # Hook event uses a dict carrier so plugins can mutate or replace.

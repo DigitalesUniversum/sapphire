@@ -201,8 +201,85 @@ export const replayTts = async (idx) => {
     const content = msg.querySelector('.message-content');
     if (!content) return;
     const prose = extractProseForTts(content);
-    // No cache key - always regenerate from current DOM content
-    if (prose) await playText(prose);
+    if (!prose) return;
+
+    // Try the streaming TTS endpoint first. Falls back to /api/tts whole-blob
+    // playback on 503 (setting off / provider can't stream) or any error.
+    // Streaming gives progressive playback + activates plugin hooks (e.g.
+    // captioning banner works for replays too).
+    try {
+        const ok = await playTextStreaming(prose);
+        if (ok) return;
+    } catch (e) {
+        console.warn('[TTS] streaming replay failed, falling back:', e?.message || e);
+    }
+    await playText(prose);
+};
+
+/** Stream a known text via /api/tts/stream → SSE → existing playback queue.
+ * Returns true if at least one chunk arrived, false if the endpoint was
+ * unavailable (503) so the caller can fall back. Other errors throw. */
+export const playTextStreaming = async (text) => {
+    stop(true);  // clear any current playback before starting new stream
+
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    let res;
+    try {
+        res = await fetch('/api/tts/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ text }),
+        });
+    } catch (e) {
+        throw new Error(`network: ${e.message}`);
+    }
+
+    if (res.status === 503 || res.status === 404) {
+        // Server declined — caller should fall back to whole-blob path.
+        try { await res.body?.cancel(); } catch {}
+        return false;
+    }
+    if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.json()).detail || ''; } catch {}
+        throw new Error(`HTTP ${res.status}${detail ? ': ' + detail : ''}`);
+    }
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.startsWith('text/event-stream')) {
+        try { await res.body?.cancel(); } catch {}
+        return false;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let sawChunk = false;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                let data;
+                try { data = JSON.parse(line.slice(6)); } catch { continue; }
+                if (data.error) throw new Error(data.error);
+                if (data.type === 'tts_stream_start') {
+                    startTtsStream();
+                } else if (data.type === 'tts_chunk') {
+                    enqueueTtsChunk(data);
+                    sawChunk = true;
+                } else if (data.type === 'tts_stream_end') {
+                    endTtsStream();
+                }
+            }
+        }
+    } finally {
+        try { await reader.cancel(); } catch {}
+    }
+    return sawChunk;
 };
 
 // Extract prose text for TTS (mirrors ui.extractProseText logic)

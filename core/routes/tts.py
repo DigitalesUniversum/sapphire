@@ -107,6 +107,63 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         raise HTTPException(status_code=400, detail="Invalid output_mode")
 
 
+@router.post("/api/tts/stream")
+async def handle_tts_stream(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Streaming TTS for known text (Replay button, future re-synth flows).
+
+    Feeds the full text through SpeechChunker → chunked synth → SSE events
+    in the same format chat_streaming emits (tts_stream_start / tts_chunk /
+    tts_stream_end). Frontend's existing event-bus subscribers play them.
+
+    Returns 503 when streaming is disabled OR provider lacks support — the
+    client should fall back to /api/tts (whole-blob) on either case.
+    """
+    import json
+    check_endpoint_rate(request, 'tts', max_calls=30, window=60)
+
+    if not getattr(config, 'TTS_STREAMING_ENABLED', False):
+        raise HTTPException(status_code=503, detail="Streaming TTS disabled in settings")
+
+    if not config.TTS_ENABLED:
+        raise HTTPException(status_code=503, detail="TTS disabled")
+
+    tts = getattr(system, 'tts', None)
+    provider = getattr(tts, '_provider', None) if tts else None
+    if not provider or not getattr(provider, 'supports_streaming', False):
+        raise HTTPException(status_code=503, detail="Provider doesn't support streaming")
+
+    data = await request.json()
+    text = (data.get('text') or '').strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided")
+    if len(text) > _TTS_MAX_CHARS:
+        raise HTTPException(status_code=413, detail=f"Text too long (max {_TTS_MAX_CHARS:,})")
+
+    def generate():
+        from core.tts.stream_pump import StreamingTTSPump
+        pump = StreamingTTSPump(system=system)
+        try:
+            # Whole text in one push — chunker splits at sentence boundaries.
+            # The final sentence (no trailing uppercase) emerges from flush.
+            for ev in pump.push(text):
+                yield f"data: {json.dumps(ev)}\n\n"
+            for ev in pump.flush_and_close():
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as e:
+            logger.error(f"[TTS-STREAM] generate failed: {e!r}", exc_info=True)
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
 @router.post("/api/tts/preview")
 async def tts_preview(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Generate TTS audio with custom voice/pitch/speed without changing system state."""

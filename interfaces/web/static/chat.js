@@ -1,6 +1,7 @@
 //  chat.js - Chat logic
 import * as ui from './ui.js';
 import * as api from './api.js';
+import * as audio from './audio.js';
 
 const handleError = (e, action) => {
     if (e.message === 'Cancelled') return console.log(`${action} cancelled by user`);
@@ -128,8 +129,9 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                 if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
-                    
+
                     setTimeout(() => {
+                        if (audio.ttsStreamSawChunk()) return;  // streaming TTS already played it
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
                             if (el) {
@@ -279,8 +281,9 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                 if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
-                    
+
                     setTimeout(() => {
+                        if (audio.ttsStreamSawChunk()) return;  // streaming TTS already played it
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
                             if (el) {
@@ -508,8 +511,9 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
-                    
+
                     setTimeout(() => {
+                        if (audio.ttsStreamSawChunk()) return;  // streaming TTS already played it
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
                             if (el) {
