@@ -101,8 +101,12 @@ export async function handleSend() {
                 if (streamOk) {
                     await ui.finishStreaming();
                     // Note: finishStreaming already syncs with history - no refresh needed
-                    
+
+                    // If brain-side streaming TTS already started during the
+                    // stream, skip the legacy whole-blob fetch — chunks are
+                    // already playing.
                     setTimeout(() => {
+                        if (audio.ttsStreamSawChunk()) return;
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
                             if (el) {

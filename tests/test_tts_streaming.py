@@ -8,7 +8,7 @@ Pure-function tests — no Sapphire integration. Focused on:
 """
 import pytest
 
-from core.tts.streaming import chunkify_for_speech, PAUSE_AFTER_MS
+from core.tts.streaming import SpeechChunker, chunkify_for_speech, PAUSE_AFTER_MS
 
 
 def _collect(tokens, min_chars=3, **kw):
@@ -317,3 +317,55 @@ def test_chunk_shape():
         assert isinstance(c["boundary"], str)
         assert isinstance(c["pause_after_ms"], int)
         assert isinstance(c["index"], int)
+
+
+# ─── SpeechChunker push/flush API (used by chat_streaming for live LLM) ──────
+
+def test_chunker_push_then_flush():
+    """Push-based API: same chunks as the generator function."""
+    chunker = SpeechChunker(min_chars=3)
+    out = []
+    for tok in ["Hello", " there", ". Next", " up."]:
+        out.extend(chunker.push(tok))
+    out.extend(chunker.flush())
+    assert [c["text"] for c in out] == ["Hello there.", "Next up."]
+
+
+def test_chunker_yields_during_push_not_just_flush():
+    """When a sentence boundary fully resolves mid-stream (i.e. the next
+    capital arrives so the lookahead succeeds), push() returns the chunk
+    immediately rather than waiting for flush()."""
+    chunker = SpeechChunker(min_chars=3)
+    out_during = []
+    out_during.extend(chunker.push("Hello there. "))  # lookahead missing
+    out_during.extend(chunker.push("More text here."))  # 'M' satisfies lookahead
+    # First sentence should have emerged during push (we never called flush)
+    assert any(c["text"] == "Hello there." for c in out_during)
+
+
+def test_chunker_indices_continuous_across_push_and_flush():
+    chunker = SpeechChunker(min_chars=3)
+    out = []
+    out.extend(chunker.push("Hi. "))
+    out.extend(chunker.push("How are you? "))
+    out.extend(chunker.flush())
+    indices = [c["index"] for c in out]
+    assert indices == list(range(len(out)))
+
+
+def test_chunker_partial_tag_across_pushes():
+    """The push API must handle the same partial-tag-across-tokens cases
+    as the generator function."""
+    chunker = SpeechChunker(min_chars=3)
+    out = []
+    out.extend(chunker.push("<thi"))
+    out.extend(chunker.push("nk>secret</think>"))
+    out.extend(chunker.push("Hello there."))
+    out.extend(chunker.flush())
+    assert [c["text"] for c in out] == ["Hello there."]
+
+
+def test_chunker_empty_stream_flushes_nothing():
+    chunker = SpeechChunker()
+    assert chunker.push("") == []
+    assert chunker.flush() == []

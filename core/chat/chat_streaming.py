@@ -9,6 +9,7 @@ from .llm_providers import LLMResponse, get_generation_params
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
 from core.metrics import metrics as token_metrics
+from core.tts.stream_pump import StreamingTTSPump
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +59,21 @@ class StreamingChat:
             files: Optional list of {"filename": "...", "text": "..."}
         """
         logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, images={len(images) if images else 0}, files={len(files) if files else 0}")
-        
+
         # Publish typing start event
         self.is_streaming = True
         publish(Events.AI_TYPING_START)
-        
+
         # Immediate feedback that backend received the request
         yield {"type": "stream_started"}
+
+        # Streaming TTS pump — emits per-chunk audio SSE events alongside
+        # LLM token content. Inert when TTS_STREAMING_ENABLED is off or
+        # provider lacks supports_streaming. Single pump spans the whole
+        # turn (across tool iterations); only the final-content iteration
+        # actually feeds it text and closes it. Defined here (outside the
+        # main try) so the cleanup-finally can always reach it.
+        tts_pump = StreamingTTSPump(system=self.main_chat.system)
 
         # Check if current prompt requires privacy mode
         try:
@@ -270,6 +279,11 @@ class StreamingChat:
                                 in_thinking = False
                             current_content += text
                             yield {"type": "content", "text": text}
+                            # Streaming TTS: push the same text to the chunker.
+                            # Returned events are tts_stream_start (first push)
+                            # and any tts_chunks whose synth completed in time.
+                            for tts_ev in tts_pump.push(text):
+                                yield tts_ev
 
                         elif event_type == "thinking":
                             # Thinking from Claude - emit as content with tags for UI
@@ -681,6 +695,10 @@ class StreamingChat:
                             config=config, metadata={"system": self.main_chat.system}
                         ))
 
+                    # Flush remaining audio chunks (blocks on synth) + tts_stream_end
+                    for tts_ev in tts_pump.flush_and_close():
+                        yield tts_ev
+
                     return
             
             # If cancelled, don't make another API call — fall through to finally block
@@ -724,6 +742,8 @@ class StreamingChat:
                             in_thinking = False
                         final_content += chunk
                         yield {"type": "content", "text": chunk}
+                        for tts_ev in tts_pump.push(chunk):
+                            yield tts_ev
 
                     elif event_type == "thinking":
                         text = event.get("text", "")
@@ -820,6 +840,10 @@ class StreamingChat:
                         config=config, metadata={"system": self.main_chat.system}
                     ))
 
+                # Flush streaming TTS for the forced-final path too.
+                for tts_ev in tts_pump.flush_and_close():
+                    yield tts_ev
+
             except Exception as final_error:
                 logger.error(f"[STREAMING] Forced final response failed: {final_error}")
                 error_msg = f"I completed {tool_call_count} tool calls but encountered an error generating the final response."
@@ -846,6 +870,11 @@ class StreamingChat:
         
         finally:
             logger.info(f"[CLEANUP] [STREAMING FINALLY] Cleaning up, cancel_flag={self.cancel_flag}")
+            # Drop any in-flight TTS synth — no events flow after this point.
+            try:
+                tts_pump.cancel()
+            except Exception as _tts_e:
+                logger.warning(f"[CLEANUP] TTS pump cancel failed: {_tts_e!r}")
             # Close any open tool cycle so history isn't left in a broken state
             # (e.g. user hit Stop mid-tool-execution)
             if self.main_chat.session_manager._in_tool_cycle:

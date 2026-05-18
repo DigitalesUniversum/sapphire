@@ -1,7 +1,7 @@
 // audio.js - Audio lifecycle with native WAV recording (no server-side ffmpeg needed)
 import * as ui from './ui.js';
 import * as api from './api.js';
-import { dispatch, Events } from './core/event-bus.js';
+import { dispatch, on as busOn, Events } from './core/event-bus.js';
 
 let audioContext, mediaStream, sourceNode, processorNode;
 let audioChunks = [];
@@ -28,11 +28,13 @@ let muted = false;
 export const setVolume = (val) => {
     volume = Math.max(0, Math.min(1, val));
     if (player) player.volume = muted ? 0 : volume;
+    if (_ttsStreamPlayer) _ttsStreamPlayer.volume = muted ? 0 : volume;
 };
 
 export const setMuted = (val) => {
     muted = val;
     if (player) player.volume = muted ? 0 : volume;
+    if (_ttsStreamPlayer) _ttsStreamPlayer.volume = muted ? 0 : volume;
 };
 
 export const getVolume = () => volume;
@@ -91,6 +93,9 @@ export const stop = (force = false) => {
         player.src = '';
         player = null;
     }
+    // Tear down the streaming-TTS chunk queue too — Stop must cut both
+    // legacy playback (full-blob) and the new per-chunk queue.
+    _ttsStreamStop();
     isStreaming = false;
     cleanup();
     // Always tell server to stop TTS — even if we don't think it's playing yet.
@@ -211,6 +216,131 @@ const extractProseForTts = (el) => {
 export const clearTtsCache = () => {
     ttsCache.clear();
 };
+
+// ---------------------------------------------------------------------------
+// Streaming TTS playback (v2.7.0)
+//
+// Brain-side chunker emits per-sentence OGG blobs over SSE; we queue + play
+// them in order via short-lived Audio elements. Each chunk is independently
+// decodable. Pause-between-chunks honors the brain's `pause_after_ms`.
+// ---------------------------------------------------------------------------
+let _ttsStreamGen = 0;       // generation counter — bumped by stop() to invalidate stale chunks
+let _ttsStreamActive = false;
+let _ttsStreamQueue = [];    // [{ blob, pause_after_ms, index, text, boundary }]
+let _ttsStreamPlayer = null;
+let _ttsStreamUrl = null;
+let _ttsStreamEnded = false; // server sent tts_stream_end (no more chunks coming)
+let _ttsStreamSawChunk = false; // any chunk arrived this turn? signals send-handlers to skip legacy audioFn
+
+const _b64ToBlob = (b64, contentType) => {
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: contentType || 'audio/ogg' });
+};
+
+const _ttsStreamCleanupCurrent = () => {
+    if (_ttsStreamUrl) {
+        try { URL.revokeObjectURL(_ttsStreamUrl); } catch {}
+        _ttsStreamUrl = null;
+    }
+    if (_ttsStreamPlayer) {
+        _ttsStreamPlayer.onended = null;
+        _ttsStreamPlayer.onerror = null;
+        _ttsStreamPlayer.src = '';
+        _ttsStreamPlayer = null;
+    }
+};
+
+const _ttsStreamPlayNext = (gen) => {
+    if (gen !== _ttsStreamGen) return;        // stopped + restarted under us
+    if (!_ttsStreamActive) return;
+    if (_ttsStreamQueue.length === 0) {
+        // Queue empty: either we're done (end marker received) or waiting.
+        if (_ttsStreamEnded) {
+            _ttsStreamActive = false;
+            _ttsStreamCleanupCurrent();
+        }
+        return;
+    }
+    const item = _ttsStreamQueue.shift();
+    _ttsStreamCleanupCurrent();
+    _ttsStreamUrl = URL.createObjectURL(item.blob);
+    _ttsStreamPlayer = new Audio(_ttsStreamUrl);
+    _ttsStreamPlayer.volume = muted ? 0 : volume;
+    _ttsStreamPlayer.onended = () => {
+        const pause = item.pause_after_ms || 0;
+        if (pause > 0) {
+            setTimeout(() => _ttsStreamPlayNext(gen), pause);
+        } else {
+            _ttsStreamPlayNext(gen);
+        }
+    };
+    _ttsStreamPlayer.onerror = (e) => {
+        console.warn('[TTS-STREAM] chunk playback error', e, 'index=', item.index);
+        // Don't surface to user — keep draining queue
+        _ttsStreamPlayNext(gen);
+    };
+    _ttsStreamPlayer.play().catch(err => {
+        if (!err?.message?.includes('autoplay') && !err?.name?.includes('AbortError')) {
+            console.warn('[TTS-STREAM] play() rejected:', err);
+        }
+        _ttsStreamPlayNext(gen);
+    });
+};
+
+/** Called by api.js SSE handler on `tts_chunk` events. */
+export const enqueueTtsChunk = ({ audio_b64, content_type, index, boundary, pause_after_ms, text }) => {
+    if (!audio_b64) return;
+    _ttsStreamSawChunk = true;
+    const blob = _b64ToBlob(audio_b64, content_type);
+    _ttsStreamQueue.push({ blob, pause_after_ms: pause_after_ms || 0, index, text, boundary });
+    if (!_ttsStreamActive) {
+        _ttsStreamActive = true;
+        _ttsStreamEnded = false;
+        isStreaming = true;
+        _ttsStreamPlayNext(_ttsStreamGen);
+    }
+};
+
+/** Called by api.js SSE handler on `tts_stream_start`. */
+export const startTtsStream = () => {
+    _ttsStreamGen += 1;
+    _ttsStreamQueue = [];
+    _ttsStreamEnded = false;
+    _ttsStreamSawChunk = false;
+    // Don't clear _ttsStreamActive — first chunk arrival kicks playback.
+};
+
+/** Called by api.js SSE handler on `tts_stream_end`. */
+export const endTtsStream = () => {
+    _ttsStreamEnded = true;
+    // If the player drained the queue before end arrived, nothing's playing
+    // and we need to finalize cleanup here.
+    if (_ttsStreamActive && _ttsStreamQueue.length === 0 && !_ttsStreamPlayer) {
+        _ttsStreamActive = false;
+        isStreaming = false;
+    }
+};
+
+/** True if any chunk arrived in the current turn — send-handlers uses this
+ * to skip the legacy end-of-stream audioFn(prose) fallback. */
+export const ttsStreamSawChunk = () => _ttsStreamSawChunk;
+
+const _ttsStreamStop = () => {
+    _ttsStreamGen += 1;       // any in-flight setTimeout / callbacks become no-ops
+    _ttsStreamQueue = [];
+    _ttsStreamEnded = true;
+    _ttsStreamActive = false;
+    _ttsStreamSawChunk = false;
+    _ttsStreamCleanupCurrent();
+};
+
+// Subscribe to SSE-relayed streaming-TTS events at module load.
+busOn('tts_stream_start', () => startTtsStream());
+busOn('tts_stream_chunk', (data) => enqueueTtsChunk(data || {}));
+busOn('tts_stream_end', () => endTtsStream());
 
 /**
  * Encode PCM samples as WAV file

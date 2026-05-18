@@ -49,6 +49,81 @@ BLOCK_TAGS: list = [
 _SECONDARY_SPLIT_FRACTION = 0.5
 
 
+class SpeechChunker:
+    """Push-based variant of chunkify_for_speech. Maintains internal state
+    across push() calls — useful when you're inside an existing token
+    loop (e.g. the LLM streaming loop in chat_streaming.py) and want to
+    integrate chunking without restructuring as a generator-of-a-generator.
+
+    Same semantics as chunkify_for_speech:
+        chunker = SpeechChunker()
+        for token in token_stream:
+            for chunk in chunker.push(token):
+                handle(chunk)
+        for chunk in chunker.flush():
+            handle(chunk)
+    """
+
+    def __init__(self, max_chars: int = 200, min_chars: int = 15):
+        self.max_chars = max_chars
+        self.min_chars = min_chars
+        self._raw_buf = ""
+        self._clean_buf = ""
+        self._chunk_index = 0
+
+    def push(self, token: str) -> list:
+        """Push a token. Returns any chunks now ready to emit."""
+        if not token:
+            return []
+        self._raw_buf += token
+        safe_len = _safe_prefix_len(self._raw_buf)
+        if safe_len > 0:
+            piece = self._raw_buf[:safe_len]
+            self._raw_buf = self._raw_buf[safe_len:]
+            self._clean_buf += _clean_piece(piece)
+        return self._drain()
+
+    def flush(self) -> list:
+        """End-of-stream — emit any remaining chunks (with relaxed min_chars
+        on the final chunk since no more tokens are coming)."""
+        out: list = []
+        # Process leftover raw — drop unclosed tags
+        if self._raw_buf:
+            leftover = self._raw_buf
+            for opener, _closer in BLOCK_TAGS:
+                if opener in leftover:
+                    idx = leftover.find(opener)
+                    leftover = leftover[:idx]
+            if leftover.count("```") % 2 == 1:
+                leftover = leftover[:leftover.rfind("```")]
+            self._clean_buf += _clean_piece(leftover)
+            self._raw_buf = ""
+        out.extend(self._drain())
+        # Final chunk for whatever's left (regardless of min_chars)
+        final_text = self._clean_buf.strip()
+        if final_text:
+            out.append(_make_chunk(final_text, "end", self._chunk_index))
+            self._chunk_index += 1
+            self._clean_buf = ""
+        return out
+
+    def _drain(self) -> list:
+        """Pull as many chunks as possible out of clean_buf with current params."""
+        out: list = []
+        while True:
+            cut = _find_split(self._clean_buf, self.max_chars, self.min_chars)
+            if cut is None:
+                break
+            chunk_text, boundary, remainder = cut
+            chunk_text = chunk_text.strip()
+            self._clean_buf = remainder
+            if not chunk_text:
+                continue
+            out.append(_make_chunk(chunk_text, boundary, self._chunk_index))
+            self._chunk_index += 1
+        return out
+
+
 def chunkify_for_speech(
     token_stream: Iterable[str],
     max_chars: int = 200,
@@ -56,13 +131,9 @@ def chunkify_for_speech(
 ) -> Iterator[dict]:
     """Consume an arbitrary token stream, yield speakable chunks.
 
-    Args:
-        token_stream: iterable yielding text deltas. Tokens may be any
-            size — single characters, words, or whole paragraphs.
-        max_chars: emit-anyway threshold. If no boundary inside this
-            window, force a split on the nearest preceding whitespace.
-        min_chars: don't emit a chunk shorter than this if more text
-            could still arrive (prevents fragmented short chunks).
+    Thin wrapper around SpeechChunker for use cases where the whole token
+    stream is available as an iterable. See SpeechChunker docstring for
+    the push-based API used by streaming integrations.
 
     Yields:
         dict per chunk:
@@ -74,70 +145,12 @@ def chunkify_for_speech(
             "index": int,           # 0-indexed within this stream
           }
     """
-    raw_buf = ""    # accumulates raw tokens; may contain partial tags
-    clean_buf = ""  # cleaned text ready to scan for chunk boundaries
-    chunk_index = 0
-
+    chunker = SpeechChunker(max_chars=max_chars, min_chars=min_chars)
     for token in token_stream:
-        if not token:
-            continue
-        raw_buf += token
-        # Move whatever is "safe to process" (no dangling open tag past
-        # this point) from raw into clean.
-        safe_len = _safe_prefix_len(raw_buf)
-        if safe_len > 0:
-            piece = raw_buf[:safe_len]
-            raw_buf = raw_buf[safe_len:]
-            clean_buf += _clean_piece(piece)
-        # Drain any chunks now visible in clean_buf
-        while True:
-            cut = _find_split(clean_buf, max_chars, min_chars)
-            if cut is None:
-                break
-            chunk_text, boundary, remainder = cut
-            chunk_text = chunk_text.strip()
-            clean_buf = remainder
-            if not chunk_text:
-                continue
-            yield _make_chunk(chunk_text, boundary, chunk_index)
-            chunk_index += 1
-
-    # Stream ended. Anything still in raw_buf is "final" — even if it
-    # contains an unclosed tag, drop it on the floor (matches the legacy
-    # _process_text_for_tts behavior).
-    if raw_buf:
-        # Force-strip any leftover open tags
-        leftover = raw_buf
-        for opener, closer in BLOCK_TAGS:
-            if opener in leftover:
-                # Drop everything from opener to end of buffer
-                idx = leftover.find(opener)
-                leftover = leftover[:idx]
-        # Drop dangling code fences too
-        if leftover.count("```") % 2 == 1:
-            leftover = leftover[:leftover.rfind("```")]
-        clean_buf += _clean_piece(leftover)
-        raw_buf = ""
-
-    # Drain remaining boundaries in clean_buf (now that more text may have
-    # arrived from the leftover flush).
-    while True:
-        cut = _find_split(clean_buf, max_chars, min_chars)
-        if cut is None:
-            break
-        chunk_text, boundary, remainder = cut
-        chunk_text = chunk_text.strip()
-        clean_buf = remainder
-        if not chunk_text:
-            continue
-        yield _make_chunk(chunk_text, boundary, chunk_index)
-        chunk_index += 1
-
-    # Final chunk for whatever's left (regardless of min_chars — this is
-    # the end of the stream, won't get more text).
-    final_text = clean_buf.strip()
-    if final_text:
-        yield _make_chunk(final_text, "end", chunk_index)
+        for chunk in chunker.push(token):
+            yield chunk
+    for chunk in chunker.flush():
+        yield chunk
 
 
 def _make_chunk(text: str, boundary: str, index: int) -> dict:

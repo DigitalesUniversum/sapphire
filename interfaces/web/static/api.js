@@ -151,6 +151,23 @@ const processSSEData = (data, handlers) => {
         return {};
     }
 
+    // Streaming TTS events (v2.7.0). Dispatched via event-bus so audio.js
+    // can subscribe without an import cycle (audio.js already imports api.js).
+    // Inert when streaming TTS is disabled on the brain — these events
+    // simply don't fire.
+    if (data.type === 'tts_stream_start') {
+        dispatch('tts_stream_start', {});
+        return {};
+    }
+    if (data.type === 'tts_chunk') {
+        dispatch('tts_stream_chunk', data);
+        return {};
+    }
+    if (data.type === 'tts_stream_end') {
+        dispatch('tts_stream_end', {});
+        return {};
+    }
+
     // Legacy chunk format
     if (data.chunk) {
         if (data.chunk.includes('<<RELOAD_PAGE>>')) {
