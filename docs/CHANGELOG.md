@@ -1,3 +1,6 @@
+# 2.7.0 - TTS Stream
+- Milestone 1/3 for true voice mode
+- Added ability to use old non-stream TTS
 # 2.6.9 - Bug hunt and performance
 - reduced latency between TTS calls
 # 2.6.8 - TTS Streaming
