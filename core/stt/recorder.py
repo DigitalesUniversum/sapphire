@@ -47,9 +47,13 @@ class AudioRecorder:
         # Silero VAD (default). Lazy-loaded on first use so module import
         # doesn't fail if onnxruntime is somehow broken. Falls back to
         # amplitude VAD if silero load/inference errors. 2026-05-16.
-        # Boolean setting matches the UI checkbox shape — no translation
-        # layer means no class of "type mismatch on save" bugs possible.
-        self._silero_enabled = bool(getattr(config, 'STT_VAD_ENABLED', True))
+        # STT_VAD_ENABLED is read LIVE per `_is_silent` call so the
+        # Settings toggle takes effect immediately without a restart.
+        # `_silero_failed_this_recording` downgrades silero → amplitude
+        # for the CURRENT recording only on inference failure; reset at
+        # the start of each new record_audio() so a transient ONNX hiccup
+        # doesn't kill silero for the rest of the process. 2026-05-20.
+        self._silero_failed_this_recording = False
         self._silero = None
         self._silero_buffer = np.zeros(0, dtype=np.int16)
         self._last_speech_prob = 0.0
@@ -122,11 +126,16 @@ class AudioRecorder:
         Amplitude (legacy): adaptive level threshold — sensitive to any
         loud non-speech sound. Always-available fallback.
 
-        Intent (STT_VAD_ENABLED, boolean) is the user's preference.
+        Intent (STT_VAD_ENABLED, boolean) is the user's preference — read
+        LIVE here so the Settings toggle takes effect on the next
+        recording without a process restart.
         Capability (silero_vad.is_available()) is the system check — set
         by the boot warmup. Silero only runs if both are true.
+        `_silero_failed_this_recording` is a one-recording-scoped flag
+        that downgrades silero on inference failure; reset by record_audio.
         """
-        if self._silero_enabled:
+        intent = bool(getattr(config, 'STT_VAD_ENABLED', True))
+        if intent and not self._silero_failed_this_recording:
             from core.stt import silero_vad as _svad
             if _svad.is_available():
                 try:
@@ -134,9 +143,10 @@ class AudioRecorder:
                 except Exception as e:
                     logger.warning(
                         f"[VAD] Silero inference failed mid-recording ({e}) — "
-                        f"falling back to amplitude for this session."
+                        f"falling back to amplitude for this recording only. "
+                        f"Will retry silero on next recording."
                     )
-                    self._silero_enabled = False
+                    self._silero_failed_this_recording = True
                     self.level_history.clear()
             # Silero pending or failed at warmup — silently use amplitude
             # this recording. User intent (settings) is preserved.
@@ -292,7 +302,10 @@ class AudioRecorder:
         publish(Events.STT_RECORDING_START)
 
         # Reset silero hidden state for this recording — each utterance
-        # starts fresh, no leakage from prior sessions
+        # starts fresh, no leakage from prior sessions. Also clear the
+        # per-recording failure flag so a transient inference error from
+        # the last recording doesn't permanently disable silero. 2026-05-20.
+        self._silero_failed_this_recording = False
         if self._silero is not None:
             try:
                 self._silero.reset()
@@ -348,7 +361,7 @@ class AudioRecorder:
                 
                 # Early abort if no speech detected within timeout (accidental wakeword trigger)
                 if not has_speech and (time.time() - start_time) > config.RECORDER_NO_SPEECH_TIMEOUT:
-                    if self._silero_enabled:
+                    if self._silero_score_count > 0:
                         n = getattr(self, '_silero_score_count', 0)
                         mean = (self._silero_prob_sum / n) if n else 0.0
                         max_amp = getattr(self, '_silero_max_amp', 0)

@@ -16,12 +16,24 @@ with our pinned torch 2.10. Using the ONNX directly is also lighter — single
 """
 import logging
 import os
+import shutil
+import socket
 import threading
 import urllib.request
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+# Network timeouts for model download. Without these, a stuck socket (corp
+# proxy, captive portal, GitHub stall) blocks the warmup thread forever,
+# leaving the UI badge stuck on "pending" with no recovery path. 2026-05-20.
+_DOWNLOAD_CONNECT_TIMEOUT_S = 15
+_DOWNLOAD_READ_TIMEOUT_S = 60
+# Hard ceiling on the whole warmup (download + ONNX load). If we blow this,
+# mark warmup as failed so the UI badge transitions out of "pending" and the
+# recorder gives up on silero for this process. 2026-05-20.
+_WARMUP_HARD_TIMEOUT_S = 120
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +82,20 @@ def is_available() -> bool:
 
 def warmup_async():
     """Kick off background download+load test. Idempotent — only starts once
-    per process. Safe to call multiple times. Sets warmup state on completion."""
+    per process. Safe to call multiple times. Sets warmup state on completion.
+
+    A watchdog thread enforces a hard timeout so the UI badge can't get stuck
+    on 'pending' forever — if anything below our explicit socket timeouts
+    blocks (kernel-level network stall, ONNX init hang on a broken GPU
+    runtime), the watchdog flips state to 'failed' after _WARMUP_HARD_TIMEOUT_S.
+    The work thread keeps running in the background but state is now
+    definitive so the recorder + UI can move on. 2026-05-20."""
     with _warmup_lock:
         if _WARMUP_STATE["started"]:
             return
         _WARMUP_STATE["started"] = True
+
+    done_evt = threading.Event()
 
     def _warmup():
         try:
@@ -83,16 +104,31 @@ def warmup_async():
             # Construct session — this is the load-test. Any ONNX issue will throw.
             SileroVAD._get_shared_session()
             with _warmup_lock:
-                _WARMUP_STATE["state"] = "ready"
-                _WARMUP_STATE["reason"] = ""
+                # Don't clobber if watchdog already declared failure
+                if _WARMUP_STATE["state"] == "pending":
+                    _WARMUP_STATE["state"] = "ready"
+                    _WARMUP_STATE["reason"] = ""
             logger.info("[SILERO-WARMUP] Silero ready")
         except Exception as e:
             with _warmup_lock:
-                _WARMUP_STATE["state"] = "failed"
-                _WARMUP_STATE["reason"] = str(e)
+                if _WARMUP_STATE["state"] == "pending":
+                    _WARMUP_STATE["state"] = "failed"
+                    _WARMUP_STATE["reason"] = str(e)
             logger.warning(f"[SILERO-WARMUP] Silero unavailable: {e}")
+        finally:
+            done_evt.set()
+
+    def _watchdog():
+        if done_evt.wait(timeout=_WARMUP_HARD_TIMEOUT_S):
+            return  # warmup completed within deadline
+        with _warmup_lock:
+            if _WARMUP_STATE["state"] == "pending":
+                _WARMUP_STATE["state"] = "failed"
+                _WARMUP_STATE["reason"] = f"warmup exceeded {_WARMUP_HARD_TIMEOUT_S}s — network or ONNX init stuck"
+                logger.warning(f"[SILERO-WARMUP] Watchdog tripped: {_WARMUP_STATE['reason']}")
 
     threading.Thread(target=_warmup, daemon=True, name="silero-warmup").start()
+    threading.Thread(target=_watchdog, daemon=True, name="silero-warmup-watchdog").start()
 
 
 class SileroVAD:
@@ -285,14 +321,26 @@ def _ensure_model_downloaded() -> Path:
     logger.info(f"[SILERO] Downloading {SILERO_VAD_URL} -> {MODEL_CACHE_PATH}")
     # Atomic download — write to .tmp then rename so a Ctrl-C mid-download
     # doesn't leave a half-file that the next run silently uses.
+    # Explicit timeouts on the socket so a stuck CDN / corp proxy / captive
+    # portal can't hang the warmup thread forever. urlretrieve doesn't take
+    # a timeout kwarg directly; use urlopen + copyfileobj instead. 2026-05-20.
     tmp_path = MODEL_CACHE_PATH.with_suffix(".onnx.tmp")
     try:
-        urllib.request.urlretrieve(SILERO_VAD_URL, str(tmp_path))
+        req = urllib.request.Request(SILERO_VAD_URL)
+        with urllib.request.urlopen(req, timeout=_DOWNLOAD_READ_TIMEOUT_S) as resp:
+            with open(tmp_path, 'wb') as f:
+                shutil.copyfileobj(resp, f)
         if tmp_path.stat().st_size < 1_000_000:
             raise RuntimeError(f"Downloaded file too small ({tmp_path.stat().st_size} bytes) — likely a redirect/error page")
         os.replace(tmp_path, MODEL_CACHE_PATH)
         logger.info(f"[SILERO] Model cached at {MODEL_CACHE_PATH} ({MODEL_CACHE_PATH.stat().st_size:,} bytes)")
         return MODEL_CACHE_PATH
+    except (socket.timeout, TimeoutError) as e:
+        # Clean up partial download
+        if tmp_path.exists():
+            try: tmp_path.unlink()
+            except Exception: pass
+        raise RuntimeError(f"silero-vad model download timed out after {_DOWNLOAD_READ_TIMEOUT_S}s — check network") from e
     except Exception as e:
         # Clean up partial download
         if tmp_path.exists():

@@ -349,10 +349,42 @@ class TTSHandler(BaseHTTPRequestHandler):
         first_chunk_ms = None
         generation_start = time.time()
 
+        # Dispatch socket writes on a separate thread so a slow client can't
+        # hold the pipeline_lock during network I/O. Inference happens under
+        # the lock (kokoro's pipeline state can't be parallelized); bytes are
+        # queued to the writer which drains independently. Other inference
+        # requests can proceed as soon as THIS request's kokoro work finishes,
+        # regardless of how slow the client is to receive. 2026-05-20.
+        import threading as _t
+        import queue as _q
+        write_queue: "_q.Queue" = _q.Queue()
+        writer_err = {'exc': None}
+
+        def _writer():
+            try:
+                while True:
+                    item = write_queue.get()
+                    if item is None:
+                        self.wfile.flush()
+                        return
+                    self.wfile.write(item)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError) as e:
+                writer_err['exc'] = e
+            except Exception as e:
+                writer_err['exc'] = e
+
+        writer_thread = _t.Thread(target=_writer, daemon=True, name="tts-stream-writer")
+        writer_thread.start()
+
         try:
             with pipeline_lock:
                 generator = pipeline(text_to_speak, voice=voice, speed=speed)
                 for _, _, seg in generator:
+                    # If writer already failed (client gone), bail early —
+                    # no point finishing inference for a dead socket.
+                    if writer_err['exc'] is not None:
+                        break
                     # Copy + free underlying tensor memory (same hazard as /tts path)
                     audio = np.copy(seg)
                     # Encode this segment to a standalone OGG/Opus blob in RAM
@@ -362,21 +394,27 @@ class TTSHandler(BaseHTTPRequestHandler):
                     ogg_bytes = buf.getvalue()
                     del audio, buf
 
-                    # Write one HTTP chunked frame: "<hex-len>\r\n<bytes>\r\n"
+                    # One HTTP chunked frame: "<hex-len>\r\n<bytes>\r\n"
                     frame_header = f"{len(ogg_bytes):x}\r\n".encode('ascii')
-                    self.wfile.write(frame_header)
-                    self.wfile.write(ogg_bytes)
-                    self.wfile.write(b"\r\n")
-                    self.wfile.flush()
+                    write_queue.put(frame_header + ogg_bytes + b"\r\n")
 
                     if first_chunk_ms is None:
+                        # Measures inference time to first segment queued.
+                        # Wire latency is the writer's problem now.
                         first_chunk_ms = int((time.time() - generation_start) * 1000)
                     segments_emitted += 1
                 del generator
+            # Lock released here — other inferences can proceed even if
+            # writer is still draining to a slow client.
 
-            # Terminating zero-length chunk
-            self.wfile.write(b"0\r\n\r\n")
-            self.wfile.flush()
+            # Terminating zero-length chunk + writer sentinel
+            write_queue.put(b"0\r\n\r\n")
+            write_queue.put(None)
+            # Bounded wait so a wedged client can't pin this request handler
+            # forever. 60s matches kokoro's HTTP timeout elsewhere.
+            writer_thread.join(timeout=60)
+            if writer_err['exc'] is not None:
+                raise writer_err['exc']
             total_ms = int((time.time() - generation_start) * 1000)
             logger.info(
                 f"Stream complete: {segments_emitted} segments, "

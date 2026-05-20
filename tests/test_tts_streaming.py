@@ -81,11 +81,25 @@ def test_url_does_not_split():
     assert "example.com" in chunks[0]["text"]
 
 
-def test_lowercase_after_period_holds_until_more_text():
-    # "world. and then" — lowercase 'a' after period prevents split.
-    # The whole thing emits as one chunk at end-of-stream.
+def test_lowercase_after_period_splits_via_casual_rule():
+    # 2026-05-20: casual sentence boundary added. Sapphire's casual register
+    # frequently produces "Hello world. and then more text." — previously
+    # held as one chunk (which delayed first-audio for the whole reply).
+    # Now splits via _CASUAL_SENTENCE_RE since the word before the period
+    # is ≥4 chars (passing the abbreviation guard).
     chunks = _collect(["Hello world. and then more text."])
+    assert len(chunks) == 2
+    assert chunks[0]["text"] == "Hello world."
+    assert chunks[1]["text"] == "and then more text."
+
+
+def test_short_word_period_does_not_split_lowercase():
+    # Abbreviation guard: "Mr." has only 2 chars before the period, so the
+    # casual rule's 4-char lookbehind blocks the split. "Mr. smith" stays
+    # together even though "smith" is lowercase.
+    chunks = _collect(["Hi from Mr. smith who is here."])
     assert len(chunks) == 1
+    assert "Mr. smith" in chunks[0]["text"]
 
 
 # ─── Block tag stripping ──────────────────────────────────────────────────────

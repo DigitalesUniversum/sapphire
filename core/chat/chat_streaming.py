@@ -866,6 +866,16 @@ class StreamingChat:
             # finalize even though we're aborting before flush_and_close.
             # Without this, isStreaming stays true / mute pill orphaned
             # until the next stream. 2026-05-18 herring-table #10.
+            #
+            # WIRE-ONLY — DO NOT FIRE THE HOOK HERE. Looks tempting to also
+            # call _fire_hook("tts_stream_end", ...) but the `finally` block
+            # below calls `tts_pump.cancel()` which fires the hook exactly
+            # once (cancel() respects `_closed` guard at stream_pump.py:290,
+            # so flush_and_close's normal-path hook fire is also single-fire).
+            # The wire-vs-hook split is intentional: SSE goes to the browser
+            # for UI cleanup; the hook goes to plugins for state finalize.
+            # Three scouts independently flagged this as a "double fire" —
+            # they were wrong; the wiring is asymmetric on purpose. 2026-05-20.
             if tts_pump._stream_started and not tts_pump._closed:
                 yield {
                     "type": "tts_stream_end",

@@ -268,10 +268,27 @@ class TTSClient:
 
     def _select_play_target(self):
         """Pick streaming vs blob playback path. Streaming only when the
-        provider declares supports_streaming AND the setting is enabled."""
+        provider declares supports_streaming AND the setting is enabled AND
+        the provider self-reports available. Without the is_available check
+        a dead Kokoro subprocess accepted a 200 OK queue, returned no audio,
+        no error toast — user thinks Sapphire is mute. 2026-05-20."""
         if not getattr(config, 'TTS_STREAMING_ENABLED', False):
             return self._generate_and_play_audio
         if not getattr(self._provider, 'supports_streaming', False):
+            return self._generate_and_play_audio
+        # is_available() can be expensive (subprocess probe) — only call
+        # when the streaming path would otherwise be selected. Fallback to
+        # blob path is graceful: blob fetch will surface its own errors
+        # cleanly via _fetch_audio's logging.
+        try:
+            if not self._provider.is_available():
+                logger.warning(
+                    "TTS streaming requested but provider is_available()=False; "
+                    "falling back to blob path"
+                )
+                return self._generate_and_play_audio
+        except Exception as e:
+            logger.warning(f"provider is_available() raised: {e!r}; falling back to blob path")
             return self._generate_and_play_audio
         return self._generate_and_play_audio_stream
 

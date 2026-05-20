@@ -249,12 +249,30 @@ def _clean_piece(text: str) -> str:
 
 
 # Sentence boundary: . ! ? optionally followed by closing quote/paren,
-# then whitespace, then uppercase letter.
+# then whitespace, then uppercase letter. The [A-Z] lookahead guards
+# against "Dr. Smith", "3.14", "3:45 PM" false splits.
 # Capture group 1 = punctuation; group 2 = optional closing quotes/parens.
 _SENTENCE_RE = re.compile(r"([\.!?])([\"'\)\]]*)\s+(?=[A-Z])")
 
-# Ellipsis: 3+ dots, then whitespace, then uppercase.
-_ELLIPSIS_RE = re.compile(r"(\.{3,})\s+(?=[A-Z])")
+# Casual sentence boundary: same shape but next char is lowercase. Required
+# for Sapphire's casual register ("hello. and yeah.") and post-action runs
+# ("*peeks out* and waves."). Guarded against abbreviations ("Dr.", "Mrs.",
+# "etc.") by requiring at least 4 word-chars BEFORE the terminator — common
+# abbreviations are ≤3 letters. False-positives still possible (4+ char
+# abbreviations like "Calif.", "Mass."), accepted as cheap-fix tradeoff vs.
+# the lockup-the-whole-buffer cost for lowercase-heavy responses. 2026-05-20.
+_CASUAL_SENTENCE_RE = re.compile(r"(?<=\w{4})([\.!?])([\"'\)\]]*)\s+(?=[a-z])")
+
+# CJK / Arabic / full-width terminators — split unconditionally on these.
+# No abbreviation ambiguity in CJK conventions, and CJK text typically has
+# no whitespace between sentences so `\s+` requirement would never match.
+# Matches the terminator + any trailing closing punctuation. 2026-05-20.
+_CJK_SENTENCE_RE = re.compile(r"([。！？؟])([\"'\)\]」』]*)")
+
+# Ellipsis: 3+ dots, then whitespace, then anything non-whitespace.
+# Dropped uppercase requirement — "..." is unambiguous (no abbreviation
+# uses three dots) and casual register is common. 2026-05-20.
+_ELLIPSIS_RE = re.compile(r"(\.{3,})\s+(?=\S)")
 
 # Paragraph: at least two newlines in a row (allow whitespace between).
 _PARAGRAPH_RE = re.compile(r"\n\s*\n")
@@ -282,8 +300,22 @@ def _find_split(buf: str, max_chars: int, min_chars: int) -> Optional[Tuple[str,
     if m:
         return buf[:m.end(1)], "ellipsis", buf[m.end():]
 
-    # 3. Sentence: .!?
+    # 3. Sentence: .!? followed by uppercase next (strict — abbreviation-safe)
     m = _SENTENCE_RE.search(buf)
+    if m:
+        end = m.end(2) if m.group(2) else m.end(1)
+        return buf[:end], "sentence", buf[m.end():]
+
+    # 3b. CJK / Arabic terminator — unconditional split, no whitespace required.
+    m = _CJK_SENTENCE_RE.search(buf)
+    if m:
+        end = m.end(2) if m.group(2) else m.end(1)
+        return buf[:end], "sentence", buf[m.end():]
+
+    # 3c. Casual sentence: .!? followed by lowercase next. Same shape as #3
+    # but for Sapphire's casual register. Abbreviation-guard via 4-char
+    # lookbehind already baked into the regex. 2026-05-20.
+    m = _CASUAL_SENTENCE_RE.search(buf)
     if m:
         end = m.end(2) if m.group(2) else m.end(1)
         return buf[:end], "sentence", buf[m.end():]

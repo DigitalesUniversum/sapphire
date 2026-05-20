@@ -24,12 +24,16 @@ import config
 from core.hooks import hook_runner, HookEvent
 from core.tts.streaming import SpeechChunker
 
-# Quick "is this worth synthesizing?" check. The Kokoro server runs its
-# own clean_text() with a strict whitelist (a-zA-Z0-9 + basic punctuation)
-# and returns 400 if the result is empty. Pre-filter to avoid the wasted
-# round-trip + the noisy error log. 2026-05-18 fix for regen-with-emoji
-# responses that were 400ing Kokoro.
-_HAS_SPEECH_RE = re.compile(r"[a-zA-Z0-9]")
+# Quick "is this worth synthesizing?" check — drops pure-emoji /
+# pure-punctuation chunks before paying the synth round-trip. 2026-05-18
+# fix for regen-with-emoji responses that were 400ing Kokoro.
+# Unicode-aware: matches any letter in any script + digits, excludes
+# underscore (which Kokoro would reject as noise). Originally Latin-only
+# `[a-zA-Z0-9]`; widened 2026-05-20 so non-English content reaches the
+# provider — Kokoro will still 400 unsupported scripts but the chunk
+# accounting (_dropped_chunks) surfaces that visibly rather than dropping
+# silently at the pump.
+_HAS_SPEECH_RE = re.compile(r"[^\W_]", re.UNICODE)
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +433,7 @@ class StreamingTTSPump:
         out: list = []
         while self.pending:
             seg_queue, done_evt, fut, meta = self.pending[0]
+            segments_emitted = 0
             # Drain any segments already in the queue
             while True:
                 try:
@@ -438,12 +443,17 @@ class StreamingTTSPump:
                 event = self._build_chunk_event(segment, meta)
                 if event:
                     out.append(event)
+                    segments_emitted += 1
             # Only advance to next chunk when this one is fully done
             if done_evt.is_set() and seg_queue.empty():
+                # Mirror flush_and_close drop accounting: a chunk that
+                # produced ZERO playable segments (Kokoro 400, decode fail,
+                # plugin nulled audio_bytes) counts as a drop so the
+                # end-of-stream notice surfaces it. Was a `pass` no-op until
+                # 2026-05-20 — mid-stream drops were silently invisible.
+                if segments_emitted == 0:
+                    self._dropped_chunks.append(meta.get("index"))
                 self.pending.popleft()
-                # If the chunk produced ZERO segments, count it as dropped
-                # so flush_and_close emits a notice. (e.g. Kokoro 400)
-                pass
             else:
                 break  # hold here — preserve order
         return out
