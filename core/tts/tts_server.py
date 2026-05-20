@@ -87,6 +87,21 @@ def schedule_restart(reason: str):
         os._exit(0)
     threading.Thread(target=_exit, daemon=True).start()
 
+# --- CPU threading tuning (must happen before model load) ---
+# Inter-op threads: Kokoro's forward pass is sequential (ALBERT → predictor
+# → decoder), so high inter-op parallelism just wastes threads on
+# coordination. 2 is enough for any internal parallel ops.
+# Intra-op threads: set via OMP_NUM_THREADS env var from sapphire.py's
+# env_callback (auto-tunes to 1.5x physical cores). PyTorch reads it on
+# import, so by the time we get here it's already applied.
+import torch as _torch
+try:
+    _torch.set_num_interop_threads(2)
+except RuntimeError:
+    pass  # already set (e.g. re-import or second init)
+logger.info(f"Torch threads: intra={_torch.get_num_threads()}, "
+            f"inter={_torch.get_num_interop_threads()}")
+
 # --- Model Setup ---
 logger.info("Loading Kokoro model...")
 pipeline = KPipeline(lang_code='a')

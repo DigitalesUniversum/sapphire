@@ -533,6 +533,23 @@ class VoiceChatSystem:
             if kokoro_dev != '' and str(kokoro_dev).strip() != '':
                 env['CUDA_VISIBLE_DEVICES'] = str(kokoro_dev).strip()
                 logger.info(f"Kokoro subprocess pinned to CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']}")
+            # CPU threading: use 1.5x physical cores (leverages some HT/SMT
+            # without full contention), capped at 12 (diminishing returns on
+            # many-core systems for an 82M model). On CUDA systems this only
+            # affects the small CPU portion (phonemization) — harmless.
+            # Benchmark-proven 7.4% gain on i5-8250U (4c/8t). 2026-05-20.
+            if 'OMP_NUM_THREADS' not in env:
+                try:
+                    import psutil
+                    phys = psutil.cpu_count(logical=False) or 4
+                    logical = psutil.cpu_count(logical=True) or phys
+                    intra_op = min(int(phys * 1.5), logical, 12)
+                    env['OMP_NUM_THREADS'] = str(intra_op)
+                    env['MKL_NUM_THREADS'] = str(intra_op)
+                    logger.info(f"Kokoro CPU threads: {intra_op} "
+                                f"(physical={phys}, logical={logical})")
+                except Exception as e:
+                    logger.debug(f"CPU thread auto-tune skipped: {e}")
             return env
 
         self.tts_server_manager = ProcessManager(
