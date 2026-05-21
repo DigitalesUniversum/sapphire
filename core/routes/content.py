@@ -306,7 +306,13 @@ async def save_custom_toolset(request: Request, _=Depends(require_login), system
         raise HTTPException(status_code=400, detail="Name required")
     if toolset_manager.save_toolset(name, functions):
         reapply_if_active(system, 'toolset', name)
-        return {"status": "success", "name": name}
+        # Echo the canonical accepted function list so the UI can re-sync from
+        # server-truth rather than trusting its own optimistic checkbox state.
+        # function_manager filters out names whose plugins aren't currently
+        # loaded — without this echo, UI showed checkboxes checked while the
+        # server-side toolset didn't include them. 2026-05-20.
+        accepted = toolset_manager.get_toolset_functions(name) or functions
+        return {"status": "success", "name": name, "functions": accepted}
     else:
         raise HTTPException(status_code=500, detail="Failed to save toolset")
 

@@ -143,10 +143,20 @@ class VoiceChatSystem:
         # (toolset was applied before plugins loaded, so plugin tools were missed).
         # Capture the name UNDER _tools_lock so a concurrent mutation can't slip
         # a stale value past us. Mirrors plugin_loader.py:902-905. 2026-05-16.
+        #
+        # 2026-05-20: removed `!= "none"` guard. The initial apply at line 97
+        # runs BEFORE plugins load — if the saved toolset references plugin
+        # tools, those names are filtered out and update_enabled_functions can
+        # land in the "none" fallback. The guard then SKIPPED recovery,
+        # letting the bad state escape boot. User had to re-activate the chat
+        # to trigger a fresh apply with plugin tools now registered.
+        # Re-applying with the name now correctly re-resolves; if the captured
+        # name is genuinely "none" (no chat or user-disabled toolset), the
+        # update is a safe no-op.
         fm = self.llm_chat.function_manager
         with fm._tools_lock:
             current = fm.current_toolset_name
-        if current and current != "none":
+        if current:
             fm.update_enabled_functions([current])
             logger.info(f"Toolset '{current}' re-applied after plugin scan")
 

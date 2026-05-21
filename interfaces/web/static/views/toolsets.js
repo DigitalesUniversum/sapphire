@@ -477,21 +477,29 @@ function debouncedSave() {
         try {
             const selected = toolsets.find(t => t.name === selectedName);
             if (selected?.type === 'user') {
-                await saveCustomToolset(selectedName, enabled);
-                // Update local state so switching away and back shows correct data
-                selected.functions = enabled;
-                selected.function_count = enabled.length;
-            }
-            // Only mutate the live runtime state if the user is editing the
-            // CURRENTLY ACTIVE toolset. Otherwise the user editing a different
-            // toolset would force the active runtime to "custom" with the
-            // edited function list, even though the active chat still names
-            // the original toolset on disk. Symptom: live LLM tool list
-            // diverges from what the chat settings say. 2026-05-16.
-            const isActive = currentToolset && currentToolset.name === selectedName;
-            if (isActive) {
-                await enableFunctions(enabled);
-                updateScene();
+                const resp = await saveCustomToolset(selectedName, enabled);
+                // Re-sync from server-truth instead of trusting our optimistic
+                // checkbox state. Server may filter out tool names whose plugins
+                // aren't currently loaded — without this, UI showed checkboxes
+                // checked while the server-side toolset didn't include them.
+                // 2026-05-20.
+                const acceptedFunctions = (resp && resp.functions) || enabled;
+                selected.functions = acceptedFunctions;
+                selected.function_count = acceptedFunctions.length;
+
+                // The server-side reapply_if_active inside /api/toolsets/custom
+                // ALREADY updates the runtime state when this is the active
+                // toolset — no second POST needed. Previously this branch also
+                // called `await enableFunctions(enabled)` which flipped
+                // current_toolset_name to "custom" (update_enabled_functions
+                // with a list >1 falls through to the custom branch), disabling
+                // the plugin auto-add path at function_manager.py:421 and
+                // breaking subsequent plugin reloads. 2026-05-20 toolset-state
+                // corruption fix.
+                const isActive = currentToolset && currentToolset.name === selectedName;
+                if (isActive) {
+                    updateScene();
+                }
             }
         } catch (e) {
             ui.showToast('Save failed', 'error');
