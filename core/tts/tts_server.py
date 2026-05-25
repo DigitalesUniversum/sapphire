@@ -106,24 +106,68 @@ logger.info(f"Torch threads: intra={_torch.get_num_threads()}, "
 # Device selection: KOKORO_DEVICE setting ('cuda' or 'cpu'). Default cuda.
 # CPU mode frees ~1-2GB VRAM for other models (Whisper, embeddings).
 # CUDA mode is much faster but requires a CUDA-capable GPU + working driver.
+#
+# Fallback chain for safe public-release:
+#   1. cuda requested + cuda available + KPipeline(device='cuda') works → cuda
+#   2. cuda requested but cuda not available → cpu (with warning)
+#   3. cuda init throws (driver mismatch, OOM, etc) → cpu (with warning)
+#   4. cpu requested → cpu (always works)
+#   5. Old KPipeline version without device kwarg → library auto-detect
 try:
     import config as _cfg
     _kokoro_device = (getattr(_cfg, 'KOKORO_DEVICE', 'cuda') or 'cuda').strip().lower()
 except Exception:
     _kokoro_device = 'cuda'
 if _kokoro_device not in ('cuda', 'cpu'):
-    logger.warning(f"KOKORO_DEVICE='{_kokoro_device}' unrecognized — falling back to cuda")
+    logger.warning(f"KOKORO_DEVICE='{_kokoro_device}' unrecognized — using cuda")
     _kokoro_device = 'cuda'
 
+# Pre-flight: if cuda requested but torch reports unavailable, demote to cpu
+# BEFORE attempting init. Saves a wasted exception cycle and gives a cleaner
+# log message that points users at the right cause.
+if _kokoro_device == 'cuda':
+    try:
+        import torch as _torch_check
+        if not _torch_check.cuda.is_available():
+            logger.warning(
+                "KOKORO_DEVICE='cuda' but torch.cuda.is_available()=False "
+                "(no GPU, broken driver, or CUDA libs missing) — using cpu"
+            )
+            _kokoro_device = 'cpu'
+    except Exception as e:
+        logger.warning(f"CUDA availability check failed ({e}) — using cpu")
+        _kokoro_device = 'cpu'
+
 logger.info(f"Loading Kokoro model on device='{_kokoro_device}'...")
+pipeline = None
 try:
     pipeline = KPipeline(lang_code='a', device=_kokoro_device)
 except TypeError:
     # Older kokoro versions don't accept device= kwarg — fall back to
-    # auto-detect (which respects CUDA_VISIBLE_DEVICES env if set by parent).
+    # auto-detect (respects CUDA_VISIBLE_DEVICES env if set by parent).
     logger.warning("KPipeline doesn't accept device kwarg — using library default")
-    pipeline = KPipeline(lang_code='a')
-logger.info(f"Model loaded successfully! Using temp dir: {TEMP_DIR}")
+    try:
+        pipeline = KPipeline(lang_code='a')
+    except Exception as e:
+        logger.error(f"Kokoro init failed even in auto-detect mode: {e}")
+        raise
+except Exception as e:
+    # CUDA init can fail at runtime even when torch.cuda.is_available() returns
+    # True (driver/lib mismatch, OOM, device-context corruption). Fall back to
+    # cpu so TTS still works.
+    if _kokoro_device == 'cuda':
+        logger.warning(f"Kokoro CUDA init failed ({e}) — falling back to cpu")
+        try:
+            pipeline = KPipeline(lang_code='a', device='cpu')
+            _kokoro_device = 'cpu'
+        except Exception as e2:
+            logger.error(f"Kokoro init failed on both cuda and cpu: {e2}")
+            raise
+    else:
+        # cpu init failed — nothing left to fall back to
+        logger.error(f"Kokoro init failed on cpu: {e}")
+        raise
+logger.info(f"Model loaded successfully on device='{_kokoro_device}'. Using temp dir: {TEMP_DIR}")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
