@@ -90,7 +90,20 @@ class StreamingTTSPump:
         # unbounded buffers.
         min_chars = max(5, int(getattr(config, "TTS_STREAMING_MIN_CHARS", 15) or 15))
         max_chars = max(min_chars + 5, int(getattr(config, "TTS_STREAMING_MAX_CHARS", 200) or 200))
-        self.chunker = SpeechChunker(max_chars=max_chars, min_chars=min_chars)
+        # Split mode + pause overrides — see Settings → TTS → Streaming.
+        # 'paragraph' (default) preserves prosody across sentences;
+        # 'sentence' lowers latency at the cost of flatter prosody.
+        split_mode = (getattr(config, "TTS_STREAMING_SPLIT_MODE", "paragraph") or "paragraph").strip().lower()
+        pause_overrides = {
+            "sentence":  int(getattr(config, "TTS_STREAMING_PAUSE_SENTENCE_MS", 0) or 0),
+            "paragraph": int(getattr(config, "TTS_STREAMING_PAUSE_PARAGRAPH_MS", 80) or 80),
+        }
+        self.chunker = SpeechChunker(
+            max_chars=max_chars,
+            min_chars=min_chars,
+            split_mode=split_mode,
+            pause_overrides=pause_overrides,
+        )
         self.pending: deque = deque()
         self.executor = None
         self._stream_started = False

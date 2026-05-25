@@ -73,11 +73,23 @@ class SpeechChunker:
                 handle(chunk)
         for chunk in chunker.flush():
             handle(chunk)
+
+    split_mode controls chunk granularity:
+      'sentence'  — break on every sentence end (lower latency, but loses
+                    prosodic flow between sentences in same paragraph).
+      'paragraph' — break only on \\n\\n paragraph breaks (preserves
+                    intonation across consecutive sentences). max_chars
+                    still applies as a safety cap so a long paragraph
+                    doesn't buffer forever. DEFAULT.
+    pause_overrides: dict mapping boundary name → ms (overrides PAUSE_AFTER_MS).
     """
 
-    def __init__(self, max_chars: int = 200, min_chars: int = 15):
+    def __init__(self, max_chars: int = 200, min_chars: int = 15,
+                 split_mode: str = "paragraph", pause_overrides: Optional[dict] = None):
         self.max_chars = max_chars
         self.min_chars = min_chars
+        self.split_mode = split_mode if split_mode in ("paragraph", "sentence") else "paragraph"
+        self.pause_overrides = pause_overrides or {}
         self._raw_buf = ""
         self._clean_buf = ""
         self._chunk_index = 0
@@ -113,7 +125,7 @@ class SpeechChunker:
         # Final chunk for whatever's left (regardless of min_chars)
         final_text = self._clean_buf.strip()
         if final_text:
-            out.append(_make_chunk(final_text, "end", self._chunk_index))
+            out.append(_make_chunk(final_text, "end", self._chunk_index, self.pause_overrides))
             self._chunk_index += 1
             self._clean_buf = ""
         return out
@@ -122,7 +134,7 @@ class SpeechChunker:
         """Pull as many chunks as possible out of clean_buf with current params."""
         out: list = []
         while True:
-            cut = _find_split(self._clean_buf, self.max_chars, self.min_chars)
+            cut = _find_split(self._clean_buf, self.max_chars, self.min_chars, self.split_mode)
             if cut is None:
                 break
             chunk_text, boundary, remainder = cut
@@ -130,7 +142,7 @@ class SpeechChunker:
             self._clean_buf = remainder
             if not chunk_text:
                 continue
-            out.append(_make_chunk(chunk_text, boundary, self._chunk_index))
+            out.append(_make_chunk(chunk_text, boundary, self._chunk_index, self.pause_overrides))
             self._chunk_index += 1
         return out
 
@@ -139,6 +151,8 @@ def chunkify_for_speech(
     token_stream: Iterable[str],
     max_chars: int = 200,
     min_chars: int = 15,
+    split_mode: str = "paragraph",
+    pause_overrides: Optional[dict] = None,
 ) -> Iterator[dict]:
     """Consume an arbitrary token stream, yield speakable chunks.
 
@@ -156,7 +170,10 @@ def chunkify_for_speech(
             "index": int,           # 0-indexed within this stream
           }
     """
-    chunker = SpeechChunker(max_chars=max_chars, min_chars=min_chars)
+    chunker = SpeechChunker(
+        max_chars=max_chars, min_chars=min_chars,
+        split_mode=split_mode, pause_overrides=pause_overrides,
+    )
     for token in token_stream:
         for chunk in chunker.push(token):
             yield chunk
@@ -164,14 +181,17 @@ def chunkify_for_speech(
         yield chunk
 
 
-def _make_chunk(text: str, boundary: str, index: int) -> dict:
+def _make_chunk(text: str, boundary: str, index: int, pause_overrides: Optional[dict] = None) -> dict:
     # Collapse whitespace inside the chunk for clean TTS input
     text = re.sub(r"\s+", " ", text).strip()
     # Clamp pause to [0, 2000ms]. A misbehaving plugin's `tts_chunk_text`
     # hook can't add a custom pause (that's metadata-only) but a future
     # custom-boundary type could yield a bogus value and freeze playback.
     # Belt-and-suspenders. 2026-05-18 herring-table #13.
-    pause = PAUSE_AFTER_MS.get(boundary, 0)
+    pauses = dict(PAUSE_AFTER_MS)
+    if pause_overrides:
+        pauses.update(pause_overrides)
+    pause = pauses.get(boundary, 0)
     pause = max(0, min(2000, int(pause)))
     return {
         "text": text,
@@ -288,9 +308,18 @@ _PARAGRAPH_RE = re.compile(r"\n\s*\n")
 _SECONDARY_RE = re.compile(r"([;:])\s+(?=[A-Z])")
 
 
-def _find_split(buf: str, max_chars: int, min_chars: int) -> Optional[Tuple[str, str, str]]:
+def _find_split(buf: str, max_chars: int, min_chars: int,
+                split_mode: str = "paragraph") -> Optional[Tuple[str, str, str]]:
     """Find earliest valid split point in buf. Returns (chunk, boundary,
-    remainder) or None if no split is justified yet."""
+    remainder) or None if no split is justified yet.
+
+    split_mode='paragraph' (default) skips sentence/casual/secondary boundaries
+    to preserve TTS prosody across consecutive sentences in same paragraph.
+    Paragraph + ellipsis + max_chars cap still apply.
+
+    split_mode='sentence' keeps the original (lower-latency) behavior splitting
+    on every sentence end.
+    """
     if len(buf) < min_chars:
         return None
 
@@ -300,37 +329,39 @@ def _find_split(buf: str, max_chars: int, min_chars: int) -> Optional[Tuple[str,
     if m:
         return buf[:m.start()], "paragraph", buf[m.end():]
 
-    # 2. Ellipsis: check before sentence_re since `...` contains `.` that
-    # sentence_re would match as a plain period.
+    # 2. Ellipsis: kept in BOTH modes — narrative pauses are intentional
+    # prosodic events, not sentence splits. Check before sentence_re since
+    # `...` contains `.` that sentence_re would match as a plain period.
     m = _ELLIPSIS_RE.search(buf)
     if m:
         return buf[:m.end(1)], "ellipsis", buf[m.end():]
 
-    # 3. Sentence: .!? followed by uppercase next (strict — abbreviation-safe)
-    m = _SENTENCE_RE.search(buf)
-    if m:
-        end = m.end(2) if m.group(2) else m.end(1)
-        return buf[:end], "sentence", buf[m.end():]
-
-    # 3b. CJK / Arabic terminator — unconditional split, no whitespace required.
-    m = _CJK_SENTENCE_RE.search(buf)
-    if m:
-        end = m.end(2) if m.group(2) else m.end(1)
-        return buf[:end], "sentence", buf[m.end():]
-
-    # 3c. Casual sentence: .!? followed by lowercase next. Same shape as #3
-    # but for Sapphire's casual register. Abbreviation-guard via 4-char
-    # lookbehind already baked into the regex. 2026-05-20.
-    m = _CASUAL_SENTENCE_RE.search(buf)
-    if m:
-        end = m.end(2) if m.group(2) else m.end(1)
-        return buf[:end], "sentence", buf[m.end():]
-
-    # 4. Secondary: ; : — only if chunk is already big enough
-    if len(buf) >= max_chars * _SECONDARY_SPLIT_FRACTION:
-        m = _SECONDARY_RE.search(buf)
+    if split_mode == "sentence":
+        # 3. Sentence: .!? followed by uppercase next (strict — abbreviation-safe)
+        m = _SENTENCE_RE.search(buf)
         if m:
-            return buf[:m.end(1)], "secondary", buf[m.end():]
+            end = m.end(2) if m.group(2) else m.end(1)
+            return buf[:end], "sentence", buf[m.end():]
+
+        # 3b. CJK / Arabic terminator — unconditional split, no whitespace required.
+        m = _CJK_SENTENCE_RE.search(buf)
+        if m:
+            end = m.end(2) if m.group(2) else m.end(1)
+            return buf[:end], "sentence", buf[m.end():]
+
+        # 3c. Casual sentence: .!? followed by lowercase next. Same shape as #3
+        # but for Sapphire's casual register. Abbreviation-guard via 4-char
+        # lookbehind already baked into the regex. 2026-05-20.
+        m = _CASUAL_SENTENCE_RE.search(buf)
+        if m:
+            end = m.end(2) if m.group(2) else m.end(1)
+            return buf[:end], "sentence", buf[m.end():]
+
+        # 4. Secondary: ; : — only if chunk is already big enough
+        if len(buf) >= max_chars * _SECONDARY_SPLIT_FRACTION:
+            m = _SECONDARY_RE.search(buf)
+            if m:
+                return buf[:m.end(1)], "secondary", buf[m.end():]
 
     # 5. Max-char fallback: split on the last whitespace inside the window.
     if len(buf) >= max_chars:

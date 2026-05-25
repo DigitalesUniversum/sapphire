@@ -262,7 +262,19 @@
   },
   "TTS_STREAMING_MAX_CHARS": {
     "short": "Maximum chunk length before force-splitting",
-    "long": "Largest chunk size before the streamer force-splits on the last whitespace inside the window. Higher values produce smoother prose but delay first audio. Sensible range: 50-500. Default 200."
+    "long": "Largest chunk size before the streamer force-splits on the last whitespace inside the window. Higher values produce smoother prose but delay first audio. Default 750 (sized for paragraph mode — fits a typical 3-5 sentence paragraph with headroom). If you switch split mode to 'sentence', lower this to 250-300 to keep the safety cap tight against single sentences. Sensible range: 50-2000."
+  },
+  "TTS_STREAMING_SPLIT_MODE": {
+    "short": "Where to break the stream for TTS",
+    "long": "How granular the stream chunks are. 'paragraph' (default) splits only on paragraph breaks (\\n\\n) — preserves prosodic flow across consecutive sentences in the same paragraph, sounds more natural. 'sentence' splits on every sentence end — lower latency to first audio, but flatter intonation since each sentence is synthesized in isolation. Max chunk length still applies as a safety cap in both modes."
+  },
+  "TTS_STREAMING_PAUSE_PARAGRAPH_MS": {
+    "short": "Pause after a paragraph break (ms)",
+    "long": "Silence inserted after a paragraph-ending chunk before the next chunk plays. Default 80ms. Set higher (200-500ms) for more deliberate pacing between paragraphs; set 0 for gapless flow."
+  },
+  "TTS_STREAMING_PAUSE_SENTENCE_MS": {
+    "short": "Pause after a sentence end (ms)",
+    "long": "Silence inserted after a sentence-ending chunk in 'sentence' split mode. Default 0 (relies on Kokoro's natural breath silence). Set higher (50-150ms) if sentences feel run-on. Only meaningful when split mode is 'sentence'."
   },
   "EMBEDDING_PROVIDER": {
     "short": "Where to run embedding inference",

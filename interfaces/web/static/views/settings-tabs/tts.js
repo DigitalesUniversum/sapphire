@@ -49,8 +49,11 @@ export default {
                 <summary style="cursor: pointer; padding: 0.25rem 0;"><strong>Streaming (Kokoro)</strong></summary>
                 ${ctx.renderFields([
                     'TTS_STREAMING_ENABLED',
+                    'TTS_STREAMING_SPLIT_MODE',
                     'TTS_STREAMING_MIN_CHARS',
-                    'TTS_STREAMING_MAX_CHARS'
+                    'TTS_STREAMING_MAX_CHARS',
+                    'TTS_STREAMING_PAUSE_PARAGRAPH_MS',
+                    'TTS_STREAMING_PAUSE_SENTENCE_MS'
                 ])}
             </details>`;
 

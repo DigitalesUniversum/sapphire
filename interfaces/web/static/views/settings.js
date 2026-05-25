@@ -397,6 +397,15 @@ function renderInput(key, value, type) {
             ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select>`;
     }
+    if (key === 'TTS_STREAMING_SPLIT_MODE') {
+        const opts = [
+            ['paragraph', 'Paragraph (smoother prosody)'],
+            ['sentence',  'Sentence (lower latency)'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
     if (key === 'STT_FIREWORKS_MODEL') {
         const models = [
             ['whisper-v3-turbo', 'Whisper V3 Turbo (Fast)'],
