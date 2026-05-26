@@ -296,13 +296,22 @@ class StreamingTTSPump:
         )
         # Surface drops as a notice — single SSE message regardless of how
         # many chunks fell. Avoids spamming the toast lane for a flaky run.
+        # Wording leads with the most common cause (unsupported characters
+        # in the text — e.g. CJK, emoji, symbols outside the active voice's
+        # phoneme set) rather than blaming server health. The synthesizer
+        # is shared across users worldwide; Sapphire often emits non-English
+        # characters that English-only voices can't render. Text itself is
+        # always delivered — only the audio for those chunks is missing.
         if self._dropped_chunks and not interrupted:
+            n = len(self._dropped_chunks)
+            chunk_word = "chunk" if n == 1 else "chunks"
             yield {
                 "type": "notice",
                 "severity": "warning",
                 "message": (
-                    f"{len(self._dropped_chunks)} TTS chunk(s) lost — "
-                    f"speech may have gaps. Check Kokoro server health."
+                    f"{n} TTS {chunk_word} couldn't be voiced — likely contains "
+                    f"characters or symbols the current voice doesn't support. "
+                    f"Text is unaffected."
                 ),
             }
         yield {
