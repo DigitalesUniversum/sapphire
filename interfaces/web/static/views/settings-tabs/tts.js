@@ -53,7 +53,8 @@ export default {
                     'TTS_STREAMING_MIN_CHARS',
                     'TTS_STREAMING_MAX_CHARS',
                     'TTS_STREAMING_PAUSE_PARAGRAPH_MS',
-                    'TTS_STREAMING_PAUSE_SENTENCE_MS'
+                    'TTS_STREAMING_PAUSE_SENTENCE_MS',
+                    'TTS_STREAMING_STAGE_PAUSE_STYLE'
                 ])}
             </details>`;
 

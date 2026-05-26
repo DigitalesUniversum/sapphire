@@ -276,6 +276,10 @@
     "short": "Pause after a sentence end (ms)",
     "long": "Silence inserted after a sentence-ending chunk in 'sentence' split mode. Default 0 (relies on Kokoro's natural breath silence). Set higher (50-150ms) if sentences feel run-on. Only meaningful when split mode is 'sentence'."
   },
+  "TTS_STREAMING_STAGE_PAUSE_STYLE": {
+    "short": "Prosody marker for *stage direction* and (parens)",
+    "long": "How to make Kokoro pause around stage direction (*X*) and parenthetical (X) content. Kokoro renders punctuation as natural prosodic pauses but doesn't pause for stars/parens alone. 'comma' (default) — gentle breath, feels conversational. 'period' — full sentence-end pause, more deliberate. 'ellipsis' — longer narrative pause, dramatic. 'none' — strip cleanly with no pause (legacy behavior). Also applies to **bold** since it's the same shape."
+  },
   "EMBEDDING_PROVIDER": {
     "short": "Where to run embedding inference",
     "long": "Local runs Nomic on your CPU (requires onnxruntime + transformers). API sends text to a remote Nomic server. Disable to use text-only search."

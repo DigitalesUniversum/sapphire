@@ -85,11 +85,18 @@ class SpeechChunker:
     """
 
     def __init__(self, max_chars: int = 200, min_chars: int = 15,
-                 split_mode: str = "paragraph", pause_overrides: Optional[dict] = None):
+                 split_mode: str = "paragraph", pause_overrides: Optional[dict] = None,
+                 stage_pause_style: str = "comma"):
         self.max_chars = max_chars
         self.min_chars = min_chars
         self.split_mode = split_mode if split_mode in ("paragraph", "sentence") else "paragraph"
         self.pause_overrides = pause_overrides or {}
+        # Stage direction prosody: how to mark *X* and (X) for Kokoro.
+        # Kokoro renders comma/period/ellipsis as natural prosodic pauses.
+        # 'none' = strip cleanly (legacy). 'comma' = gentle breath (default).
+        self.stage_pause_style = stage_pause_style if stage_pause_style in (
+            "none", "comma", "period", "ellipsis"
+        ) else "comma"
         self._raw_buf = ""
         self._clean_buf = ""
         self._chunk_index = 0
@@ -132,6 +139,10 @@ class SpeechChunker:
 
     def _drain(self) -> list:
         """Pull as many chunks as possible out of clean_buf with current params."""
+        # Apply stage-direction prosody substitution before splitting.
+        # Complete *X* and (X) pairs get wrapped with the configured marker;
+        # unclosed ones remain as-is and get processed when the closer arrives.
+        self._clean_buf = _apply_stage_prosody(self._clean_buf, self.stage_pause_style)
         out: list = []
         while True:
             cut = _find_split(self._clean_buf, self.max_chars, self.min_chars, self.split_mode)
@@ -153,6 +164,7 @@ def chunkify_for_speech(
     min_chars: int = 15,
     split_mode: str = "paragraph",
     pause_overrides: Optional[dict] = None,
+    stage_pause_style: str = "comma",
 ) -> Iterator[dict]:
     """Consume an arbitrary token stream, yield speakable chunks.
 
@@ -173,6 +185,7 @@ def chunkify_for_speech(
     chunker = SpeechChunker(
         max_chars=max_chars, min_chars=min_chars,
         split_mode=split_mode, pause_overrides=pause_overrides,
+        stage_pause_style=stage_pause_style,
     )
     for token in token_stream:
         for chunk in chunker.push(token):
@@ -253,6 +266,12 @@ def _safe_prefix_len(raw: str) -> int:
 # Inline cleanup for safe-prefix pieces. Block tags should already be
 # handled via safe-prefix gating; these patterns are belt-and-suspenders
 # plus inline markdown handling.
+#
+# Note: stars (*X*) and parens ((X)) are NOT stripped here — they're handled
+# by _apply_stage_prosody in _drain so we can wrap them with prosodic
+# markers (commas/periods/ellipses) before stripping. Kokoro renders comma
+# pauses naturally; stripping stars early left stage directions inline with
+# no prosodic cue, which sounded flat.
 _INLINE_PATTERNS = [
     (re.compile(r"<think>.*?</think>", re.DOTALL), " "),
     (re.compile(r"<reasoning>.*?</reasoning>", re.DOTALL), " "),
@@ -263,9 +282,52 @@ _INLINE_PATTERNS = [
     (re.compile(r"\|[^\n]*\|(?:\n\|[^\n]*\|)*"), " "),      # tables
     (re.compile(r"<[^>]+>"), " "),                          # complete HTML tag
     (re.compile(r"\[([^\]]+)\]\([^)]+\)"), r"\1"),          # markdown link → text
-    (re.compile(r"\*+"), ""),                               # bold/italic stars
     (re.compile(r"(?<!\w)_+(?!\w)"), ""),                   # underscore emphasis
 ]
+
+# Stage-prosody marker per style. (before, after) wrappers substituted around
+# *X* and (X) content. Kokoro renders these as natural pauses; bare stars/
+# parens it skips or renders flat.
+_STAGE_MARKERS = {
+    "none":     ("", ""),
+    "comma":    (", ", ", "),
+    "period":   (". ", ". "),
+    "ellipsis": ("... ", "... "),
+}
+
+# Match *X* (bold/italic markdown) — one or more stars wrapping non-star
+# content. Matches **bold**, *italic*, and any star-count Sapphire uses.
+_STAR_WRAP_RE = re.compile(r"\*+([^*]+?)\*+")
+
+# Match (X) — parenthetical content, single line. Non-greedy so nested
+# parens still match the inner pair first. Bounded length (max 200 chars)
+# so a runaway-open `(` can't swallow the rest of the buffer.
+_PAREN_WRAP_RE = re.compile(r"\(([^()]{1,200})\)")
+
+
+def _apply_stage_prosody(text: str, style: str) -> str:
+    """Substitute *X* and (X) with prosodic markers per style.
+
+    Runs on the accumulated clean_buf inside SpeechChunker._drain. Complete
+    pairs get wrapped; unclosed *X (still streaming) stay as-is until the
+    closer arrives in a later token. After substitution, any stray stars
+    are stripped.
+    """
+    before, after = _STAGE_MARKERS.get(style, _STAGE_MARKERS["comma"])
+    if before or after:
+        text = _STAR_WRAP_RE.sub(lambda m: f"{before}{m.group(1).strip()}{after}", text)
+        text = _PAREN_WRAP_RE.sub(lambda m: f"{before}{m.group(1).strip()}{after}", text)
+    else:
+        # 'none' style: strip stars/parens cleanly without prosodic markers.
+        text = _STAR_WRAP_RE.sub(r"\1", text)
+        text = _PAREN_WRAP_RE.sub(r"\1", text)
+    # Strip any stray stars left over (unclosed mid-stream, double-wrapped, etc.)
+    text = re.sub(r"\*+", "", text)
+    # Collapse the comma/period doubling that substitution can produce
+    # (e.g. ", , " or ". . ") into a single marker.
+    text = re.sub(r"(,\s*){2,}", ", ", text)
+    text = re.sub(r"(\.\s*){2,}", ". ", text)
+    return text
 
 
 def _clean_piece(text: str) -> str:

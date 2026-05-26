@@ -2,6 +2,7 @@
 - Milestone 1/3 for true voice mode
 - Added ability to use old non-stream TTS
 - Fixed sneaky bug where tools in toolsets said not available
+- Added chunking for sentence or paragraph (sentence lost flow)
 # 2.6.9 - Bug hunt and performance
 - reduced latency between TTS calls
 # 2.6.8 - TTS Streaming

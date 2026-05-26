@@ -98,11 +98,16 @@ class StreamingTTSPump:
             "sentence":  int(getattr(config, "TTS_STREAMING_PAUSE_SENTENCE_MS", 0) or 0),
             "paragraph": int(getattr(config, "TTS_STREAMING_PAUSE_PARAGRAPH_MS", 80) or 80),
         }
+        # Stage-direction prosody style — controls how *X* and (X) sound.
+        # 'comma' adds gentle breath, 'period' adds full sentence-end pause,
+        # 'ellipsis' adds longer narrative pause, 'none' = no marker (legacy).
+        stage_pause_style = (getattr(config, "TTS_STREAMING_STAGE_PAUSE_STYLE", "comma") or "comma").strip().lower()
         self.chunker = SpeechChunker(
             max_chars=max_chars,
             min_chars=min_chars,
             split_mode=split_mode,
             pause_overrides=pause_overrides,
+            stage_pause_style=stage_pause_style,
         )
         self.pending: deque = deque()
         self.executor = None

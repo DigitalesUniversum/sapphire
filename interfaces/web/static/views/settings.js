@@ -406,6 +406,17 @@ function renderInput(key, value, type) {
             ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select>`;
     }
+    if (key === 'TTS_STREAMING_STAGE_PAUSE_STYLE') {
+        const opts = [
+            ['comma',    'Comma (gentle breath, default)'],
+            ['period',   'Period (full sentence-end pause)'],
+            ['ellipsis', 'Ellipsis (longer narrative pause)'],
+            ['none',     'None (strip cleanly, legacy)'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
     if (key === 'STT_FIREWORKS_MODEL') {
         const models = [
             ['whisper-v3-turbo', 'Whisper V3 Turbo (Fast)'],
