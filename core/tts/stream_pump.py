@@ -257,6 +257,13 @@ class StreamingTTSPump:
             # dropped (Kokoro 400 / network / decode failure all land here)
             if segments_for_this_chunk == 0:
                 self._dropped_chunks.append(chunk_idx)
+                logger.warning(
+                    f"[TTS-STREAM] chunk {chunk_idx} dropped: zero playable segments emitted"
+                )
+            else:
+                logger.info(
+                    f"[TTS-STREAM] chunk {chunk_idx} emitted {segments_for_this_chunk} segment(s)"
+                )
             self.pending.popleft()
         # Cancel remaining workers on interrupt
         if interrupted:
@@ -275,6 +282,12 @@ class StreamingTTSPump:
                 "interrupted": interrupted,
                 "system": self.system,
             },
+        )
+        logger.info(
+            f"[TTS-STREAM] stream {self._stream_id[:8]} done: "
+            f"{self._chunk_count} chunks emitted, "
+            f"{len(self._dropped_chunks)} dropped, "
+            f"{self._total_chars} chars, interrupted={interrupted}"
         )
         # Surface drops as a notice — single SSE message regardless of how
         # many chunks fell. Avoids spamming the toast lane for a flaky run.
@@ -419,12 +432,14 @@ class StreamingTTSPump:
         seg_queue: queue.Queue = queue.Queue()
         done_evt = threading.Event()
         fut = self._executor().submit(
-            self._stream_synth, text_to_synth, voice, speed, seg_queue, done_evt
+            self._stream_synth, text_to_synth, voice, speed,
+            seg_queue, done_evt, chunk["index"],
         )
         self.pending.append((seg_queue, done_evt, fut, meta))
 
     def _stream_synth(self, text: str, voice: str, speed: float,
-                      seg_queue: "queue.Queue", done_evt: threading.Event):
+                      seg_queue: "queue.Queue", done_evt: threading.Event,
+                      chunk_index: int):
         """Worker-thread body: iterate provider.generate_stream() and push
         each segment into the chunk's Queue. On a non-streaming provider,
         fall back to a single generate() call and push one blob.
@@ -432,17 +447,30 @@ class StreamingTTSPump:
         The base class default of generate_stream yields a single blob
         from generate(), so this is also safe if a provider declares
         supports_streaming=True but ships the default impl."""
+        n_segments = 0
+        total_bytes = 0
         try:
             if self._provider_streams:
                 for segment in self.provider.generate_stream(text, voice, speed):
                     if segment:
                         seg_queue.put(segment)
+                        n_segments += 1
+                        total_bytes += len(segment)
             else:
                 audio = self.provider.generate(text, voice, speed)
                 if audio:
                     seg_queue.put(audio)
+                    n_segments += 1
+                    total_bytes += len(audio)
+            logger.info(
+                f"[TTS-STREAM] chunk {chunk_index} synth done: "
+                f"{n_segments} segments, {total_bytes} bytes"
+            )
         except Exception as e:
-            logger.warning(f"[TTS-STREAM] stream synth raised: {e!r}")
+            logger.warning(
+                f"[TTS-STREAM] chunk {chunk_index} synth raised after "
+                f"{n_segments} segments / {total_bytes} bytes: {e!r}"
+            )
         finally:
             done_evt.set()
 
@@ -472,8 +500,16 @@ class StreamingTTSPump:
                 # plugin nulled audio_bytes) counts as a drop so the
                 # end-of-stream notice surfaces it. Was a `pass` no-op until
                 # 2026-05-20 — mid-stream drops were silently invisible.
+                idx = meta.get("index")
                 if segments_emitted == 0:
-                    self._dropped_chunks.append(meta.get("index"))
+                    self._dropped_chunks.append(idx)
+                    logger.warning(
+                        f"[TTS-STREAM] chunk {idx} dropped: zero playable segments emitted"
+                    )
+                else:
+                    logger.info(
+                        f"[TTS-STREAM] chunk {idx} emitted {segments_emitted} segment(s)"
+                    )
                 self.pending.popleft()
             else:
                 break  # hold here — preserve order

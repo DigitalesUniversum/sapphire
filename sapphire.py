@@ -185,6 +185,16 @@ class VoiceChatSystem:
         except Exception as _e:
             logger.warning(f"Failed to register provider reload callbacks: {_e}")
 
+        # Apply persisted LOG_LEVEL + register hot-reload. Boot defaults to
+        # INFO via sapphire_logging; the saved setting takes over here.
+        try:
+            from core.sapphire_logging import set_log_level
+            from core.settings_manager import settings as _settings
+            set_log_level(getattr(config, 'LOG_LEVEL', 'INFO'))
+            _settings.register_reload_callback('LOG_LEVEL', set_log_level)
+        except Exception as _e:
+            logger.warning(f"Failed to apply LOG_LEVEL setting: {_e}")
+
         logger.info(f"System init took: {(time.time() - start_time)*1000:.1f}ms")
 
     @property

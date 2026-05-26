@@ -74,7 +74,7 @@ export default {
     icon: '\u26A1',
     description: 'System settings and danger zone',
     essentialKeys: ['WEB_UI_SSL_ADHOC'],
-    advancedKeys: ['WEB_UI_HOST', 'WEB_UI_PORT'],
+    advancedKeys: ['WEB_UI_HOST', 'WEB_UI_PORT', 'LOG_LEVEL'],
 
     render(ctx) {
         return `

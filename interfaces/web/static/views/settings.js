@@ -406,6 +406,17 @@ function renderInput(key, value, type) {
             ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select>`;
     }
+    if (key === 'LOG_LEVEL') {
+        const opts = [
+            ['DEBUG',   'DEBUG (verbose, dev only)'],
+            ['INFO',    'INFO (default)'],
+            ['WARNING', 'WARNING (quiet)'],
+            ['ERROR',   'ERROR (very quiet)'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
     if (key === 'TTS_STREAMING_STAGE_PAUSE_STYLE') {
         const opts = [
             ['comma',    'Comma (gentle breath, default)'],

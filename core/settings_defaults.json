@@ -130,7 +130,8 @@
   "server": {
     "WEB_UI_HOST": "0.0.0.0",
     "WEB_UI_PORT": 8073,
-    "WEB_UI_SSL_ADHOC": true
+    "WEB_UI_SSL_ADHOC": true,
+    "LOG_LEVEL": "INFO"
   },
   
   "llm": {

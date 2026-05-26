@@ -138,6 +138,23 @@ root_logger.addHandler(console_handler)
 # Quiet down noisy loggers
 logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
 
+
+def set_log_level(level_name):
+    """Hot-apply root logger level. Called on boot with config.LOG_LEVEL and
+    via settings reload callback when the user changes the setting.
+
+    uvicorn.access stays pinned at WARNING regardless — HTTP access log noise
+    bleeding back at DEBUG would drown the actual diagnostic content the user
+    flipped to DEBUG to see."""
+    name = (level_name or "INFO").upper()
+    level = getattr(logging, name, None)
+    if not isinstance(level, int):
+        root_logger.warning(f"Unknown log level {level_name!r}; keeping current")
+        return
+    root_logger.setLevel(level)
+    logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+    root_logger.info(f"Log level set to {name}")
+
 # Windows: asyncio ProactorEventLoop logs harmless ConnectionResetError on socket cleanup
 # These are cosmetic — the response already completed successfully.
 # The error appears in exc_info (not msg), so check the full formatted record.
