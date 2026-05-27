@@ -36,47 +36,29 @@ const FALLBACK_IDLE_POOL = [
 const FALLBACK_CAMERA = { x: 0, y: 1.3, z: 4.4 };
 const FALLBACK_TARGET = { x: 0, y: 1.1, z: 0 };
 
-// State machine — priority-based with persist/duration (not configurable)
-const STATES = {
-    idle:        { priority: 0 },
-    user_typing: { priority: 8,  duration: 3000 },   // user is typing — she notices
-    reading:     { priority: 22, duration: 2500 },    // user sent — she reads the message
-    listening:   { priority: 30, persist: true },
-    processing:  { priority: 25, persist: true },
-    thinking:    { priority: 20, persist: true },
-    typing:      { priority: 40, persist: true },     // AI composing — virtual keyboard anim
-    speaking:    { priority: 50, persist: true },
-    toolcall:    { priority: 35, duration: 3000 },
-    wakeword:    { priority: 45, duration: 2000 },
-    error:       { priority: 10, duration: 4000 },
-    happy:       { priority: 5,  duration: 3000 },
-    agent:       { priority: 15, persist: true },
-    cron:        { priority: 12, duration: 3000 },
-    wave:        { priority: 5,  duration: 4500 },
-};
-
-// force: true = always transitions, even through a persist state
+// Flat event → state-name map. The rail system being built next will split
+// this into AI-initiated vs user-initiated rails; for now every event just
+// crossfades to its mapped state and the existing oneshot machinery returns
+// to idle when a transient clip finishes. Error events (LLM/TTS/STT) now
+// route to toasts instead of the avatar — dropped from this map intentionally.
 const TRANSITIONS = {
-    [eventBus.Events.STT_RECORDING_START]:  { state: 'listening' },
-    [eventBus.Events.STT_RECORDING_END]:    { state: 'processing', force: true },
-    [eventBus.Events.STT_PROCESSING]:       { state: 'processing' },
-    [eventBus.Events.AI_TYPING_START]:      { state: 'typing' },
-    [eventBus.Events.AI_TYPING_END]:        { state: 'happy', force: true },
-    [eventBus.Events.TTS_PLAYING]:          { state: 'speaking' },
-    [eventBus.Events.TTS_STOPPED]:          { state: 'idle', force: true },
-    [eventBus.Events.TOOL_EXECUTING]:       { state: 'toolcall' },
-    [eventBus.Events.TOOL_COMPLETE]:        { state: 'typing', force: true },
-    [eventBus.Events.WAKEWORD_DETECTED]:    { state: 'wakeword' },
-    [eventBus.Events.LLM_ERROR]:            { state: 'error', force: true },
-    [eventBus.Events.TTS_ERROR]:            { state: 'error', force: true },
-    [eventBus.Events.STT_ERROR]:            { state: 'error', force: true },
-    [eventBus.Events.AGENT_SPAWNED]:        { state: 'agent' },
-    [eventBus.Events.AGENT_COMPLETED]:      { state: 'happy', force: true },
-    [eventBus.Events.AGENT_DISMISSED]:      { state: 'idle', force: true },
-    [eventBus.Events.CONTINUITY_TASK_STARTING]: { state: 'cron' },
-    [eventBus.Events.CONTINUITY_TASK_COMPLETE]: { state: 'idle', force: true },
-    [eventBus.Events.USER_TYPING]:  { state: 'user_typing' },
-    [eventBus.Events.USER_SENT]:    { state: 'reading' },
+    [eventBus.Events.STT_RECORDING_START]:  'listening',
+    [eventBus.Events.STT_RECORDING_END]:    'processing',
+    [eventBus.Events.STT_PROCESSING]:       'processing',
+    [eventBus.Events.AI_TYPING_START]:      'typing',
+    [eventBus.Events.AI_TYPING_END]:        'happy',
+    [eventBus.Events.TTS_PLAYING]:          'speaking',
+    [eventBus.Events.TTS_STOPPED]:          'idle',
+    [eventBus.Events.TOOL_EXECUTING]:       'toolcall',
+    [eventBus.Events.TOOL_COMPLETE]:        'typing',
+    [eventBus.Events.WAKEWORD_DETECTED]:    'wakeword',
+    [eventBus.Events.AGENT_SPAWNED]:        'agent',
+    [eventBus.Events.AGENT_COMPLETED]:      'happy',
+    [eventBus.Events.AGENT_DISMISSED]:      'idle',
+    [eventBus.Events.CONTINUITY_TASK_STARTING]: 'cron',
+    [eventBus.Events.CONTINUITY_TASK_COMPLETE]: 'idle',
+    [eventBus.Events.USER_TYPING]:          'user_typing',
+    [eventBus.Events.USER_SENT]:            'reading',
 };
 
 // Track cleanup between sidebar reloads
@@ -688,13 +670,13 @@ export async function init(container) {
         action.play();
         currentAction = action;
 
-        // When a oneshot finishes during idle, pick next idle variant
-        if (ONESHOT_TRACKS.has(trackName) && current === 'idle') {
+        // Oneshot tracks return to idle when the clip finishes. setState('idle')
+        // re-arms the variety scheduler so the picker keeps cycling.
+        if (ONESHOT_TRACKS.has(trackName)) {
             mixer.addEventListener('finished', function onDone(e) {
-                if (e.action === action) {
-                    mixer.removeEventListener('finished', onDone);
-                    if (current === 'idle') scheduleIdleVariant();
-                }
+                if (e.action !== action) return;
+                mixer.removeEventListener('finished', onDone);
+                if (currentAction === action) setState('idle');
             });
         }
     }
@@ -715,61 +697,39 @@ export async function init(container) {
         }, delay);
     }
 
-    // --- State machine ---
+    // --- State (flat, no priorities) ---
+    // The rail system replaces priority/persist/duration. For now setState
+    // just records the latest event-mapped state and crossfades; the
+    // ONESHOT_TRACKS handling inside crossfadeTo returns to idle when a
+    // transient clip finishes.
     let current = greetingTrack ? 'wave' : 'idle';
-    let resetTimer = null;
-    let _aiAnimLockUntil = 0;
 
-    function setState(name, force = false) {
-        if (Date.now() < _aiAnimLockUntil) return;
-
-        const state = STATES[name];
-        if (!state) return;
-
-        const cur = STATES[current];
-        if (!force && name !== 'idle' && cur && state.priority < cur.priority && cur.persist) return;
-
-        clearTimeout(resetTimer);
+    function setState(name) {
         clearTimeout(idleTimer);
         current = name;
         crossfadeTo(name);
         if (statusEl) statusEl.textContent = name === 'idle' ? '' : name;
-
-        if (name === 'idle') {
-            scheduleIdleVariant();
-        }
-
-        if (state.duration) {
-            resetTimer = setTimeout(() => setState('idle', true), state.duration);
-        }
+        if (name === 'idle') scheduleIdleVariant();
     }
 
     // Wire SSE events
     const unsubs = [];
-    for (const [event, transition] of Object.entries(TRANSITIONS)) {
-        const unsub = eventBus.on(event, () => setState(transition.state, transition.force));
+    for (const [event, stateName] of Object.entries(TRANSITIONS)) {
+        const unsub = eventBus.on(event, () => setState(stateName));
         if (unsub) unsubs.push(unsub);
     }
 
-    // AI-triggered animations: <<avatar: trackname>> in chat responses
-    let _avatarReturnTimer = null;
+    // Sapph-triggered animations: <<avatar: trackname>> in chat responses.
+    // Strip-phase version: plain oneshot. The rail system being built next
+    // will own this handler properly (rails 1/2, mode=once|loop, wind-down).
     const avatarUnsub = eventBus.on('avatar_animate', (data) => {
-        const { track, duration } = data || {};
-        console.log(`[Avatar] Received avatar_animate: track="${track}" lock=${Date.now() < _aiAnimLockUntil}`);
+        const { track } = data || {};
         const action = actions[track];
         if (!action) {
             console.warn(`[Avatar] Track "${track}" not found in model`);
             return;
         }
 
-        clearTimeout(_avatarReturnTimer);
-
-        // Lock state machine — protect this animation for its duration (min 2s)
-        const clipDuration = action.getClip().duration * 1000;
-        const lockMs = duration || Math.max(clipDuration, 2000);
-        _aiAnimLockUntil = Date.now() + lockMs;
-
-        // Play as oneshot overlay
         action.reset();
         action.setLoop(THREE.LoopOnce);
         action.clampWhenFinished = true;
@@ -777,22 +737,12 @@ export async function init(container) {
         action.play();
         currentAction = action;
 
-        // Return to previous state when done
-        const returnToPrev = () => {
-            if (currentAction !== action) return;
-            crossfadeTo(current);
-        };
-
-        if (duration) {
-            _avatarReturnTimer = setTimeout(returnToPrev, duration);
-        } else {
-            mixer.addEventListener('finished', function onDone(e) {
-                if (e.action === action) {
-                    mixer.removeEventListener('finished', onDone);
-                    returnToPrev();
-                }
-            });
-        }
+        // Return to the latest SSE-mapped state when the clip finishes.
+        mixer.addEventListener('finished', function onDone(e) {
+            if (e.action !== action) return;
+            mixer.removeEventListener('finished', onDone);
+            if (currentAction === action) crossfadeTo(current);
+        });
     });
     if (avatarUnsub) unsubs.push(avatarUnsub);
 
@@ -821,9 +771,7 @@ export async function init(container) {
     // Cleanup
     const _thisCleanup = () => {
         running = false;
-        clearTimeout(resetTimer);
         clearTimeout(idleTimer);
-        clearTimeout(_avatarReturnTimer);
         clearInterval(_micPoll);
         unsubs.forEach(fn => fn());
         _chatUnsubs.forEach(fn => fn());
