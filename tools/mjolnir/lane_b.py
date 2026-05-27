@@ -160,9 +160,23 @@ async def _run_scenario_on_page(page, scenario: scenarios.Scenario,
 
 async def _run_browser(p, browser_kind: str, browser_label: str,
                        page_url: str, observer_src: str,
-                       audio_b64: str, only: Optional[str]) -> list:
-    """Run all Lane B scenarios on one browser."""
+                       audio_b64: str, only: Optional[str],
+                       no_autoplay_bypass: bool = False) -> list:
+    """Run all Lane B scenarios on one browser.
+
+    When `no_autoplay_bypass` is True, browsers launch WITHOUT the
+    `--autoplay-policy=no-user-gesture-required` flag (and equivalent
+    Firefox prefs). That puts the test in the REAL autoplay-policy
+    environment — used to reproduce the MEI / transient-activation
+    bug class that the bypass flag normally hides.
+    """
     results = []
+
+    # Chromium-family autoplay args (only added when not bypassing)
+    chromium_autoplay_args = (
+        [] if no_autoplay_bypass
+        else ["--autoplay-policy=no-user-gesture-required"]
+    )
 
     if browser_kind == "brave":
         brave_path = _detect_brave_binary()
@@ -173,22 +187,24 @@ async def _run_browser(p, browser_kind: str, browser_label: str,
         # Use chromium with Brave's executable
         browser = await p.chromium.launch(
             headless=True, executable_path=brave_path,
-            # Browsers launched via executable path sometimes need explicit args
-            args=["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
+            args=["--no-sandbox", *chromium_autoplay_args],
         )
     elif browser_kind == "chromium":
         browser = await p.chromium.launch(
             headless=True,
-            args=["--autoplay-policy=no-user-gesture-required"],
+            args=chromium_autoplay_args,
         )
     elif browser_kind == "firefox":
-        # Firefox needs autoplay overrides via prefs
+        # Firefox needs autoplay overrides via prefs. When bypass is on,
+        # set media.autoplay.default=0 (allowed); when bypass is OFF, leave
+        # the browser default in place (block all autoplay).
+        ff_prefs = {} if no_autoplay_bypass else {
+            "media.autoplay.default": 0,
+            "media.autoplay.blocking_policy": 0,
+        }
         browser = await p.firefox.launch(
             headless=True,
-            firefox_user_prefs={
-                "media.autoplay.default": 0,
-                "media.autoplay.blocking_policy": 0,
-            },
+            firefox_user_prefs=ff_prefs,
         )
     else:
         print(f"  [{browser_label}] unknown browser_kind: {browser_kind}")
@@ -261,8 +277,14 @@ async def _run_browser(p, browser_kind: str, browser_label: str,
 
 
 async def run_lane_b(only: Optional[str] = None,
-                      browsers: Optional[list] = None) -> list:
-    """Run Lane B across requested browsers. Default: chromium + firefox + brave (if found)."""
+                      browsers: Optional[list] = None,
+                      no_autoplay_bypass: bool = False) -> list:
+    """Run Lane B across requested browsers. Default: chromium + firefox + brave (if found).
+
+    no_autoplay_bypass=True puts the browsers in real-world autoplay-policy
+    mode (MEI gate, transient-activation rules). Used to reproduce the
+    autoplay bug class.
+    """
     if browsers is None:
         browsers = ["chromium", "firefox", "brave"]
 
@@ -270,6 +292,9 @@ async def run_lane_b(only: Optional[str] = None,
     page_url = f"http://127.0.0.1:{port}/tools/mjolnir/page.html"
     observer_src = (Path(__file__).parent / "audio_real_observer.js").read_text()
     audio_b64 = _silent_audio_b64()
+
+    if no_autoplay_bypass:
+        print("\n[Lane B] NO-AUTOPLAY-BYPASS mode — testing real MEI/gesture rules")
 
     all_results = []
     try:
@@ -283,7 +308,8 @@ async def run_lane_b(only: Optional[str] = None,
                 print(f"\n=== Lane B / {label} ===")
                 all_results.extend(
                     await _run_browser(p, b, label, page_url,
-                                        observer_src, audio_b64, only)
+                                        observer_src, audio_b64, only,
+                                        no_autoplay_bypass=no_autoplay_bypass)
                 )
     finally:
         shutdown_server()

@@ -184,11 +184,22 @@ export const playText = async (txt, cacheKey = null) => {
     } catch (e) {
         isStreaming = false;
         ui.hideStatus();
-        if (!e.message?.includes('cancelled') && !e.message?.includes('aborted') &&
-            !e.message?.includes('interrupted') && !e.message?.includes('removed') &&
-            !e.name?.includes('NotAllowedError') && !e.name?.includes('AbortError') &&
-            !e.message?.includes('autoplay')) {
-            ui.showToast(`Audio error: ${e.message}`, 'error');
+        // stop() / a newer playText nulls `player` before this catch fires,
+        // so a null `player` here means the rejection IS the expected
+        // consequence of a stop/preempt — stay quiet. With `player` still
+        // set, the failure is genuine; the previous behavior of swallowing
+        // AbortError/NotAllowedError/autoplay silently left the user with
+        // no signal on Brave autoplay-block + Shields blob-URL races, which
+        // is the symmetric form of the streaming-path silent drain.
+        if (player === null) return;
+        const cls = e.name || '';
+        const msg = e.message || '';
+        if (cls.includes('NotAllowedError') || msg.includes('autoplay')) {
+            ui.showToast('Browser blocked audio — click anywhere on the page, then try again.', 'warning');
+        } else if (cls.includes('AbortError') || msg.includes('interrupted')) {
+            ui.showToast('Audio playback failed — check system audio output or browser autoplay permissions.', 'warning');
+        } else {
+            ui.showToast(`Audio error: ${msg}`, 'error');
         }
     }
 };
@@ -325,6 +336,12 @@ let _ttsStreamPlayer = null;
 let _ttsStreamUrl = null;
 let _ttsStreamEnded = false; // server sent tts_stream_end (no more chunks coming)
 let _ttsStreamSawChunk = false; // any chunk arrived this turn? signals send-handlers to skip legacy audioFn
+// True once at least one chunk's play() promise has resolved (i.e. audio
+// actually started playing) within the current generation. Drives the
+// "chunks arrived but nothing ever played" toast — without it, the .catch
+// recursion drains the queue cleanly with no user-facing signal, which
+// matches the vague "no audio" reports we couldn't otherwise account for.
+let _ttsStreamAnyPlayed = false;
 // Brain stamps every streaming-TTS payload with a unique stream_id (UUID).
 // Frontend tracks the CURRENT id and drops events tagged with anything
 // else — handles the "regenerate while playing" / "replay while chat
@@ -383,6 +400,22 @@ const _ttsStreamCleanupCurrent = () => {
     _ttsStreamUrl = null;
 };
 
+// Called when the stream is finishing naturally (SSE end + queue drained).
+// If chunks arrived but no play() ever resolved, the user got text + no
+// audio + no signal — surface a toast so they know to check audio output
+// or browser autoplay rules. Gated on sawChunk so we don't toast when the
+// stream produced zero chunks (the legacy fallback handles that case).
+const _ttsStreamMaybeWarnSilent = () => {
+    if (_ttsStreamSawChunk && !_ttsStreamAnyPlayed) {
+        try {
+            ui.showToast(
+                'TTS chunks couldn’t play — check system audio output or browser autoplay permissions.',
+                'warning'
+            );
+        } catch {}
+    }
+};
+
 let _ttsStreamCurrent = null;  // {audio, url, blob, pause_after_ms, index, text, boundary}
 
 const _ttsStreamPlayNext = (gen) => {
@@ -391,6 +424,7 @@ const _ttsStreamPlayNext = (gen) => {
     if (_ttsStreamQueue.length === 0) {
         // Queue empty: either we're done (end marker received) or waiting.
         if (_ttsStreamEnded) {
+            _ttsStreamMaybeWarnSilent();
             _ttsStreamActive = false;
             _ttsStreamCleanupCurrent();
             isStreaming = false;
@@ -438,6 +472,7 @@ const _ttsStreamPlayNext = (gen) => {
         // item.audio may already be nulled (e.g. stop() ran before play
         // settled); guard before flagging.
         if (item.audio) item.audio._playStarted = true;
+        _ttsStreamAnyPlayed = true;
     }).catch(err => {
         if (err?.message?.includes('autoplay')) {
             // Autoplay-blocked. Recoverable on next user gesture; stay quiet.
@@ -529,6 +564,7 @@ export const startTtsStream = (data = {}) => {
     _ttsStreamQueue = [];
     _ttsStreamEnded = false;
     _ttsStreamSawChunk = false;
+    _ttsStreamAnyPlayed = false;
     // Don't clear _ttsStreamActive — first chunk arrival kicks playback.
 };
 
@@ -547,6 +583,7 @@ export const endTtsStream = (data = {}) => {
     // dirty until the next stream. Cleanup is idempotent — safe to run
     // even when the player is still draining. 2026-05-18 herring-table #11.
     if (_ttsStreamQueue.length === 0 && !_ttsStreamPlayer) {
+        _ttsStreamMaybeWarnSilent();
         _ttsStreamActive = false;
         isStreaming = false;
         _ttsStreamCleanupCurrent();
@@ -566,6 +603,7 @@ const _ttsStreamStop = () => {
     _ttsStreamEnded = true;
     _ttsStreamActive = false;
     _ttsStreamSawChunk = false;
+    _ttsStreamAnyPlayed = false;
     _currentStreamId = null;  // herring #5 — no stream is current after stop
     _ttsStreamCleanupCurrent();
 };

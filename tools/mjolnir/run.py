@@ -106,6 +106,10 @@ async def main():
     parser.add_argument("--browsers", default=None,
                         help="comma-separated subset for Lane B "
                              "(chromium,firefox,brave). Default: all available.")
+    parser.add_argument("--no-autoplay-bypass", action="store_true",
+                        help="Lane B: launch browsers WITHOUT the autoplay bypass "
+                             "flag. Tests real MEI / transient-activation rules. "
+                             "Use to reproduce the autoplay bug class.")
     args = parser.parse_args()
 
     console = Console()
@@ -120,7 +124,10 @@ async def main():
 
     if args.lane in ("b", "all"):
         console.print("\n[bold cyan]── Lane B: real-browser scenarios ──[/bold cyan]")
-        all_results.extend(await run_lane_b(only=args.scenario, browsers=browsers))
+        all_results.extend(await run_lane_b(
+            only=args.scenario, browsers=browsers,
+            no_autoplay_bypass=args.no_autoplay_bypass,
+        ))
 
     if args.lane in ("c", "all"):
         console.print("\n[bold cyan]── Lane C: backend hammer ──[/bold cyan]")

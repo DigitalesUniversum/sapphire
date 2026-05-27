@@ -153,6 +153,20 @@ SCENARIOS = [
         expects_skips=True,
     ),
     Scenario(
+        name="autoplay-blocked-every-chunk",
+        description=(
+            "REPRODUCES the user's no-audio bug: every play() rejects with "
+            "NotAllowedError. Real Chrome MEI=0 + no-gesture scenario. Each "
+            "new Audio element is locked, transient activation has expired by "
+            "the time the first chunk arrives (LLM latency >5s), so every "
+            "chunk's play() rejects. Audio.js silently advances → silent failure."
+        ),
+        chunks=_seq(5, 100),
+        mock_config=MockConfig(play_latency_ms=10, audio_duration_ms=100,
+                                play_rejects_with="NotAllowedError"),
+        expects_skips=True,
+    ),
+    Scenario(
         name="abort-cascade",
         description="Every play() rejects with AbortError — original no-audio bug class",
         chunks=_seq(5, 100),
