@@ -155,6 +155,8 @@ function syncDynamicTabs() {
             }
         }
     }));
+    // Alphabetize so the Plugin Settings list is stable + scannable.
+    dynamicTabs.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
 
 const MANAGED_HIDDEN_TABS = new Set(['audio', 'wakeword', 'system', 'network', 'embedding']);

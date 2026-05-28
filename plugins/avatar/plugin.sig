@@ -7,13 +7,13 @@
     "build_avatar.py": "sha256:4eee73a9cc27beb0ea76113e7f13c877da86bbe699be1e62138d460c8e1baf91",
     "build_avatar_sapphire.py": "sha256:0f407c4ea52a28a540574611d3d075a8de3991b2422ce3db29d893782d42a4f8",
     "glb_merger.py": "sha256:6baccd4aced1a2fb5d97bc0b679ea58b8f0bc35527abadbc1dd9b3ace99d13ca",
-    "glb_parser.py": "sha256:86faa6b6aa71e317eef840981ec7a923e885826b980738e5a127972d2a9ec4b9",
+    "glb_parser.py": "sha256:5727ac462125f37c0e46f41ace380c813af988fce0d86652cf0fe71373a77904",
     "hooks/prompt_inject.py": "sha256:9c614020a86b17ebb6cd39e515e6a249a478d78e691b029300b943185ed94568",
     "plugin.json": "sha256:21292cf8a11a3cf222d5f4af72f9e24e1a52b3777502b5d958fcb4587e96a69e",
     "routes/api.py": "sha256:b621e3f63c33f1400268bd16e5a1ed711135830a8f8562c6a2bcbd4c8c305b95",
     "web/camera-orbits.js": "sha256:9e401ad6f7207a805a5e507374788a2b1b5c444405a9303a43a97983851f87e7",
     "web/environment.js": "sha256:591e515585034d671f849bec899e70b01426fb7ea01e6a4085da4a383e8eaf99",
-    "web/index.js": "sha256:faae1e3a3d76c07667bf3463fd2fc260bc27c8918501e3b1d543e6de64502447",
+    "web/index.js": "sha256:45d84c4a48fdbc9c78234047dd7029007e92392335ed311a2199a974ec0969c4",
     "web/location-loader.js": "sha256:44e5ff7c32326f83a18e0a66469711960844bc1e6d27d5345b689750fb8e0206",
     "web/locations/cabin.json": "sha256:eb865f82e70a35667d1ebb1c0c9d4c98f235c4cc98fc9e2bb92ffaacbde83c26",
     "web/locations/garden.json": "sha256:31490c87be0e50db9e63ab8b8b595ce40414d6f3dbf03f6d599a5d4f62f0081a",
@@ -23,7 +23,7 @@
     "web/objects.js": "sha256:e2cf8b8267153d7a2a9a7c1aac843af391731c01d2d889bf69b8bf048f5a1775",
     "web/player-controller.js": "sha256:6df8289350f01f185f7c8c4d9e39f9d762b5aa05de367ed3deb39e6c9b4d8450",
     "web/sidebar.html": "sha256:c0d25cc097f997c3413abd941e6bbbde238cb6c65e35a0d19885d75b40fc5e25",
-    "web/sidebar.js": "sha256:3dca3093a7e44289f4b8e7964a366d266958a41c50b34c70ecb30779de782f39"
+    "web/sidebar.js": "sha256:8fcb6691c7361209b33c1ca8f3052d613947908fd62c43e9748a73bcc18f5a36"
   },
-  "signature": "qLAFqKCKOjx8w3a00AeGMz/gTDsREWp+QOh3xiy3jX4qlftCGm1GmK2ZDVpCJB0K5TOeLEChVIOzN5bEgWhbCw=="
+  "signature": "+ajmUQWLJzkt3U4lKMb/pkz61g9Ktm2FwzyNcrODuMMN6ObrcF2ZkFD4p2uz6T2SOUXSVheKAj8BvOSsNLd7Aw=="
 }

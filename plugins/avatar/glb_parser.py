@@ -75,10 +75,13 @@ def get_model_info(glb_path):
     }
 
 
-# Common animation name patterns for auto-mapping
+# Common animation name patterns for auto-mapping. Keys must match a state
+# name that some transition in sidebar.js actually targets, OR be 'wave'
+# which feeds the greeting_track default. Adding new keys without a runtime
+# consumer just populates dead entries in the generated track_map.
 AUTO_MAP = {
     'idle':        ['idle', 'stand', 'standing', 'rest', 'default', 'breathe', 'breathing'],
-    'thinking':    ['thinking', 'think', 'ponder', 'concentrate', 'focus', 'plotting'],
+    'processing':  ['thinking', 'think', 'ponder', 'concentrate', 'focus', 'plotting'],
     'typing':      ['typing', 'type', 'keyboard', 'defaultanim', 'compose', 'writing', 'texting'],
     'listening':   ['listening', 'listen', 'hear', 'attentive', 'look', 'lookaround', 'listening_nod'],
     'speaking':    ['speaking', 'speak', 'talk', 'talking', 'say', 'attention'],
@@ -112,10 +115,11 @@ def build_default_config(track_names):
     """Build a default config for a newly uploaded model."""
     mapped = auto_map_tracks(track_names)
 
-    # Default track map — fill unmapped states with idle or first track
+    # Default track map — fill unmapped states with idle or first track.
+    # Keep this list aligned with AVATAR_STATES in web/index.js.
     fallback = mapped.get('idle', track_names[0] if track_names else 'idle')
     track_map = {}
-    for state in ['idle', 'thinking', 'typing', 'listening', 'speaking', 'toolcall', 'happy', 'wakeword', 'user_typing', 'reading']:
+    for state in ['idle', 'processing', 'typing', 'listening', 'speaking', 'toolcall', 'happy', 'wakeword', 'agent', 'cron', 'user_typing', 'reading']:
         track_map[state] = mapped.get(state, fallback)
 
     # Default idle pool — include idle + any mapped tracks at low weights

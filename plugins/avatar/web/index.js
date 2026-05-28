@@ -1,7 +1,6 @@
 // Avatar plugin settings — model management, track mapping, idle pool
 import { registerPluginSettings } from '/static/shared/plugin-registry.js';
 
-console.log('[Avatar Settings] Module loaded');
 const API = '/api/plugin/avatar';
 
 function csrf() {
@@ -14,16 +13,21 @@ async function fetchJSON(url, opts = {}) {
     return r.ok ? r.json() : null;
 }
 
-// Avatar states that need track mapping
+// Avatar states that need track mapping. Each key must correspond to a state
+// that some entry in sidebar.js's TRANSITIONS dict actually targets — keep
+// these aligned. Adding a state here without wiring it (or vice versa) leaves
+// a dead dropdown or an unconfigurable event.
 const AVATAR_STATES = [
     { key: 'idle',        label: 'Idle' },
-    { key: 'thinking',    label: 'Thinking' },
+    { key: 'processing',  label: 'Transcribing' },
     { key: 'typing',      label: 'Composing' },
     { key: 'listening',   label: 'Listening' },
     { key: 'speaking',    label: 'Speaking' },
     { key: 'toolcall',    label: 'Tool Use' },
     { key: 'happy',       label: 'Happy' },
     { key: 'wakeword',    label: 'Alert' },
+    { key: 'agent',       label: 'Agent Working' },
+    { key: 'cron',        label: 'Scheduled Task' },
     { key: 'user_typing', label: 'User Typing' },
     { key: 'reading',     label: 'Reading' },
 ];
@@ -57,7 +61,6 @@ registerPluginSettings({
 
     render: (container) => {
         _renderContainer = container;
-        console.log('[Avatar Settings] render() called, container:', container?.id || container?.className);
         injectStyles();
 
         container.innerHTML = `

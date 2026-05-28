@@ -16,13 +16,15 @@ const GLTF_CDN  = '/cdn-cache/esm.sh/three@0.170.0/addons/loaders/GLTFLoader.js?
 const ORBIT_CDN = '/cdn-cache/esm.sh/three@0.170.0/addons/controls/OrbitControls.js?bundle&target=es2022&external=three';
 const CROSSFADE_MS = 400;
 
-// Hardcoded fallback defaults (used when no config exists)
-// Track names: idle, listening, thinking, attention, attention2, defaultanim(=typing), happy, wave
+// Hardcoded fallback defaults (used when no config exists). Keys must match
+// state names that some entry in TRANSITIONS actually targets — anything else
+// is dead. 'error' routes to toasts; 'wave' is the greeting (played by clip
+// name directly, not via this map); 'thinking' had no event mapping.
 const FALLBACK_TRACK_MAP = {
     idle: 'idle', listening: 'listening', processing: 'thinking',
-    thinking: 'thinking', typing: 'defaultanim', speaking: 'attention',
+    typing: 'defaultanim', speaking: 'attention',
     toolcall: 'attention2', wakeword: 'attention', happy: 'happy',
-    wave: 'wave', error: 'idle', agent: 'thinking', cron: 'thinking',
+    agent: 'thinking', cron: 'thinking',
     user_typing: 'attention', reading: 'listening',
 };
 const FALLBACK_IDLE_POOL = [
@@ -540,6 +542,11 @@ export async function init(container) {
     const loader = new GLTFLoader();
     let mixer, actions = {}, currentAction = null;
 
+    // State vars must exist before the greeting flow inside the try-block
+    // calls setState('idle'). Function declarations hoist; `let` doesn't.
+    let idleTimer = null;
+    let current = greetingTrack ? 'wave' : 'idle';
+
     try {
         const gltf = await new Promise((resolve, reject) => {
             loader.load(MODEL_URL, resolve, undefined, reject);
@@ -585,7 +592,10 @@ export async function init(container) {
             actions[clip.name] = action;
         }
 
-        // Start with greeting track, then idle
+        // Start with greeting track, then idle. Go through setState('idle')
+        // after the greeting so the variety picker actually arms — going
+        // through crossfadeTo directly skipped scheduleIdleVariant and the
+        // pool wouldn't start cycling until the first SSE event landed.
         const greetAction = greetingTrack ? actions[greetingTrack] : null;
         if (greetAction) {
             greetAction.setLoop(THREE.LoopOnce);
@@ -594,11 +604,11 @@ export async function init(container) {
             mixer.addEventListener('finished', function onGreetDone(e) {
                 if (e.action === greetAction) {
                     mixer.removeEventListener('finished', onGreetDone);
-                    crossfadeTo('idle');
+                    setState('idle');
                 }
             });
         } else {
-            crossfadeTo('idle');
+            setState('idle');
         }
 
         // Enable avatar shadow casting for environment
@@ -682,8 +692,6 @@ export async function init(container) {
     }
 
     // --- Idle variety system ---
-    let idleTimer = null;
-
     function scheduleIdleVariant() {
         clearTimeout(idleTimer);
         const delay = 8000 + Math.random() * 12000;
@@ -701,9 +709,8 @@ export async function init(container) {
     // The rail system replaces priority/persist/duration. For now setState
     // just records the latest event-mapped state and crossfades; the
     // ONESHOT_TRACKS handling inside crossfadeTo returns to idle when a
-    // transient clip finishes.
-    let current = greetingTrack ? 'wave' : 'idle';
-
+    // transient clip finishes. (`current` is declared earlier so the
+    // greeting flow inside the model-load try-block can call setState.)
     function setState(name) {
         clearTimeout(idleTimer);
         current = name;
