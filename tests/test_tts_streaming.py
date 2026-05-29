@@ -219,6 +219,39 @@ def test_paragraph_pause_metadata():
     assert chunks[0]["pause_after_ms"] == PAUSE_AFTER_MS["paragraph"]
 
 
+def test_tiny_paragraph_merges_forward_not_own_chunk():
+    # A 1-word paragraph ("Oh-") mid-reply must NOT become its own chunk —
+    # Kokoro would render it out of context and it adds a stray pause. It
+    # merges FORWARD into the next paragraph. 2026-05-28.
+    chunks = _collect(
+        ["Oh-\n\nHere is a much longer paragraph with real content to speak."],
+        min_chars=15, split_mode="paragraph",
+    )
+    texts = [c["text"] for c in chunks]
+    assert "Oh-" not in texts, f"tiny paragraph leaked as its own chunk: {texts}"
+    assert any("Oh-" in t and "longer paragraph" in t for t in texts), texts
+
+
+def test_short_whole_reply_still_renders():
+    # A whole short reply ("Sure") is below min_chars and has no boundary, but
+    # flush() must still emit it at end-of-stream — min_chars only gates
+    # MID-STREAM splitting, never the final flush. 2026-05-28.
+    chunks = _collect(["Sure"], min_chars=15, split_mode="paragraph")
+    assert [c["text"] for c in chunks] == ["Sure"]
+
+
+def test_two_tiny_paragraphs_both_merge_forward():
+    # Several tiny paragraphs in a row accumulate until a chunk reaches
+    # min_chars rather than each becoming its own out-of-context fragment.
+    chunks = _collect(
+        ["Oh-\n\nHm.\n\nWell, here is the actual substantive reply content."],
+        min_chars=15, split_mode="paragraph",
+    )
+    texts = [c["text"] for c in chunks]
+    assert "Oh-" not in texts and "Hm." not in texts, texts
+    assert any("substantive reply" in t for t in texts), texts
+
+
 # ─── Max-char fallback ───────────────────────────────────────────────────────
 
 def test_max_char_fallback_splits_long_no_punctuation():

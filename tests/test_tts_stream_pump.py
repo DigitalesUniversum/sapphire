@@ -706,8 +706,8 @@ def test_drop_notice_singular_for_one_dropped(enable_streaming):
 def test_drop_notice_plural_for_multiple_dropped(enable_streaming):
     """2+ → 'chunks' (plural)."""
     pump = StreamingTTSPump(system=_make_system(provider=_NoAudioStreamingProvider()))
-    # Two paragraphs → two pump-chunks, both drop
-    pump.push("Hello there.\n\nMore text here.")
+    # Two paragraphs (each >= min_chars) → two pump-chunks, both drop
+    pump.push("Hello there friend.\n\nMore text follows here.")
     out = list(pump.flush_and_close())
     notices = [e for e in out if e.get("type") == "notice"]
     assert len(notices) == 1
@@ -851,7 +851,7 @@ def test_end_of_stream_summary_log_includes_dropped_count(enable_streaming, capl
     so future diagnostics can see partial-failure runs at a glance."""
     caplog.set_level("INFO", logger="core.tts.stream_pump")
     pump = StreamingTTSPump(system=_make_system(provider=_NoAudioStreamingProvider()))
-    pump.push("Hello there.\n\nMore text here.")
+    pump.push("Hello there friend.\n\nMore text follows here.")
     list(pump.flush_and_close())
     msgs = [r.getMessage() for r in caplog.records]
     end_summary = [m for m in msgs if "done:" in m and "chunks emitted" in m]

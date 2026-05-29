@@ -408,11 +408,17 @@ def _find_split(buf: str, max_chars: int, min_chars: int,
     if len(buf) < min_chars:
         return None
 
-    # 1. Paragraph: always splits (even ignoring min_chars logically — but
-    # we already gated on min_chars above).
-    m = _PARAGRAPH_RE.search(buf)
-    if m:
-        return buf[:m.start()], "paragraph", buf[m.end():]
+    # 1. Paragraph break — but don't emit a chunk smaller than min_chars.
+    # A 1-word paragraph ("Oh-") mid-reply would otherwise become its own
+    # chunk: Kokoro renders it out of context AND it adds a stray pause. Scan
+    # for the first paragraph break that leaves a chunk of at least min_chars;
+    # a too-small leading paragraph merges FORWARD into the next one. (Whole
+    # short replies like "Sure" have no paragraph break and are emitted by
+    # flush() regardless of min_chars at end-of-stream, so they still render.)
+    # 2026-05-28.
+    for m in _PARAGRAPH_RE.finditer(buf):
+        if len(buf[:m.start()].strip()) >= min_chars:
+            return buf[:m.start()], "paragraph", buf[m.end():]
 
     # 2. Ellipsis: kept in BOTH modes — narrative pauses are intentional
     # prosodic events, not sentence splits. Check before sentence_re since
