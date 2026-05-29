@@ -2,7 +2,7 @@
 
 Sapphire can remember facts about your world — people you know, topics you care about, reference documents, and goals you're working toward. The Knowledge system organizes all of this and makes it searchable by the AI during conversations.
 
-Everything lives in the **Mind** view (brain icon in the nav bar), which has five tabs: Memories, People, Human Knowledge, AI Knowledge, and Goals.
+Everything lives in the **Mind** view (brain icon in the nav bar), which has five tabs: [Memories](MEMORY.md), [People](PEOPLE.md), Human Knowledge, AI Knowledge, and [Goals](GOALS.md). This guide covers the **Knowledge** tabs (human + AI) and the shared **scope** system used by all five.
 
 <img width="50%" alt="sapphire-memories" src="https://github.com/user-attachments/assets/348f1628-5f0c-4ce3-948e-2e0c1385bc75" />
 
@@ -57,25 +57,7 @@ Useful for giving the AI reference material for a specific conversation without 
 
 ## Goals
 
-Track what you're working toward. Goals support hierarchy (subtasks), priorities, and progress journaling.
-
-<img width="50%" alt="sapphire-goals" src="https://github.com/user-attachments/assets/9ab3e309-5014-4d83-add0-4004d507085c" />
-
-### Creating Goals
-
-The AI can create goals during conversation using `create_goal`, or you can add them in the Mind → Goals tab.
-
-| Field | Purpose |
-|-------|---------|
-| Title | What you want to accomplish |
-| Description | Details and context |
-| Priority | high, medium, low |
-| Status | active, completed, abandoned |
-| Parent | Optional — makes this a subtask |
-
-### Progress Notes
-
-Goals have a timestamped progress journal. The AI can log progress with `update_goal`, or you can add notes in the UI. These are append-only — a running log of what happened.
+Goals have their own guide now — see **[GOALS.md](GOALS.md)**.
 
 ---
 
@@ -128,8 +110,7 @@ TOOLS:
 
 DATABASES:
 - user/knowledge.db — people, knowledge_tabs, knowledge_entries, knowledge_fts
-- user/goals.db — goals, progress_journal
-- user/memory.db — memories, memories_fts, memory_scopes
+- (memory → see MEMORY.md · goals → see GOALS.md)
 
 SCOPES:
 - Knowledge scoped via scope_knowledge ContextVar (default: 'default')
@@ -155,12 +136,3 @@ CHUNKING:
 - Long content auto-split: paragraph → sentence → word boundaries
 - Each chunk embedded independently for search
 - Source filename tracked for reference
-
-GOALS:
-- create_goal(title, description?, priority?, parent_id?) — create goal or subtask
-- list_goals(goal_id?, status?) — smart overview or detail view
-- update_goal(goal_id, title?, description?, status?, priority?, progress_note?) — modify + journal
-- delete_goal(goal_id, cascade?) — delete with optional subtask cascade
-- Priorities: high, medium, low
-- Statuses: active, completed, abandoned
-- Progress journal: timestamped append-only entries

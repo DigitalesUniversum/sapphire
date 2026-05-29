@@ -37,7 +37,7 @@ function content() { return container?.querySelector('#aikn-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: MIND_TABS, active: 'ai-knowledge', help: helpPills('AI Knowledge', { video: 'I3g3tzukpV0', doc: 'SELF.md', inline: true }), status: 'Reference data Sapphire writes on her own — you can read and delete.' })}
+        ${renderSectionHeader({ tabs: MIND_TABS, active: 'ai-knowledge', help: helpPills('AI Knowledge', { video: 'I3g3tzukpV0', doc: 'KNOWLEDGE.md', inline: true }), status: 'Reference data Sapphire writes on her own — you can read and delete.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">

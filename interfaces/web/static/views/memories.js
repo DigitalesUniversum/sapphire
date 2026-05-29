@@ -54,7 +54,7 @@ function content() { return container?.querySelector('#mem-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: MIND_TABS, active: 'memories', help: helpPills('Memories', { video: 'nM__u1fiWCw', doc: 'MEMORIES.md', inline: true }), status: 'Short snippets Sapphire saves during conversation — search, filter, or click chips to narrow.' })}
+        ${renderSectionHeader({ tabs: MIND_TABS, active: 'memories', help: helpPills('Memories', { video: 'nM__u1fiWCw', doc: 'MEMORY.md', inline: true }), status: 'Short snippets Sapphire saves during conversation — search, filter, or click chips to narrow.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">
