@@ -42,7 +42,6 @@ function render() {
                     <button class="btn-sm btn-primary" id="w-new">+ Webhook</button>
                 </div>
                 <div id="w-list"></div>
-                <div class="trigger-deferred-note">⏳ Per-webhook activity history will arrive with the notification system.</div>
             </div>
         </div>`;
     bindTriggerTabs(container);

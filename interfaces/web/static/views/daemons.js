@@ -42,7 +42,6 @@ function render() {
                     <button class="btn-sm btn-primary" id="d-new">+ Daemon</button>
                 </div>
                 <div id="d-list"></div>
-                <div class="trigger-deferred-note">⏳ Per-daemon activity history will arrive with the notification system.</div>
             </div>
         </div>`;
     bindTriggerTabs(container);
