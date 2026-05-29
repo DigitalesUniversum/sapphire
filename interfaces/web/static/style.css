@@ -1891,6 +1891,33 @@ body {
     margin: 0;
     font-size: var(--font-md);
 }
+
+/* Triggers section (Heartbeat / Scheduled / Daemons / Webhooks) */
+.trigger-status {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+.trigger-status-count { color: var(--text); font-weight: 600; }
+.trigger-status-desc { flex: 1; min-width: 0; }
+.trigger-status-run { display: inline-flex; align-items: center; gap: 4px; }
+.trigger-single { max-width: 820px; margin: 0 auto; padding: 0 4px; }
+.trigger-2col { grid-template-columns: 1fr 1fr; }
+.trigger-deferred-note {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    text-align: center;
+}
 .sched-create-opt:not(:last-child) { border-bottom: 1px solid var(--border); }
 
 /* Horizontal timeline strip */

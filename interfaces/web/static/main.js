@@ -29,7 +29,10 @@ const VIEW_MODULES = {
     prompts:  `./views/prompts.js${_v}`,
     toolsets: `./views/toolsets.js${_v}`,
     spices:   `./views/spices.js${_v}`,
-    schedule: `./views/schedule.js${_v}`,
+    heartbeat: `./views/heartbeat.js${_v}`,
+    scheduled: `./views/scheduled.js${_v}`,
+    daemons:  `./views/daemons.js${_v}`,
+    webhooks: `./views/webhooks.js${_v}`,
     mind:     `./views/mind.js${_v}`,
     settings: `./views/settings.js${_v}`,
     help:     `./views/help.js${_v}`,
@@ -332,7 +335,7 @@ async function init() {
 }
 
 // Plugins that own a nav-rail view — hide nav if plugin disabled
-const PLUGIN_NAV_MAP = { continuity: 'schedule' };
+const PLUGIN_NAV_MAP = { continuity: 'triggers' };
 
 function syncNavWithPlugins() {
     fetch('/api/webui/plugins').then(r => r.ok ? r.json() : null).then(d => {

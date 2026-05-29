@@ -109,10 +109,16 @@
                 <div class="nav-flyout-item" data-view="spices" role="button" tabindex="0">&#x1F336;&#xFE0F; Spices</div>
             </div>
         </div>
-        <button class="nav-item" data-view="schedule">
-            <span class="nav-icon">&#x23F0;</span>
-            <span class="nav-label">Schedule</span>
-        </button>
+        <div class="nav-item nav-group-parent" data-view="triggers" role="button" tabindex="0">
+            <span class="nav-icon">&#x26A1;</span>
+            <span class="nav-label">Triggers</span>
+            <div class="nav-flyout">
+                <div class="nav-flyout-item" data-view="heartbeat" role="button" tabindex="0">&#x1F493; Heartbeat</div>
+                <div class="nav-flyout-item" data-view="scheduled" role="button" tabindex="0">&#x1F4C5; Scheduled</div>
+                <div class="nav-flyout-item" data-view="daemons" role="button" tabindex="0">&#x1F4E1; Daemons</div>
+                <div class="nav-flyout-item" data-view="webhooks" role="button" tabindex="0">&#x1F517; Webhooks</div>
+            </div>
+        </div>
         <button class="nav-item" data-view="mind">
             <span class="nav-icon">&#x1F9E0;</span>
             <span class="nav-label">Mind</span>
@@ -404,11 +410,17 @@
                 <p>Loading...</p>
             </div>
         </div>
-        <div id="view-schedule" class="view" style="display:none">
-            <div class="view-placeholder">
-                <h2>Schedule</h2>
-                <p>Loading...</p>
-            </div>
+        <div id="view-heartbeat" class="view" style="display:none">
+            <div class="view-placeholder"><h2>Heartbeat</h2><p>Loading...</p></div>
+        </div>
+        <div id="view-scheduled" class="view" style="display:none">
+            <div class="view-placeholder"><h2>Scheduled</h2><p>Loading...</p></div>
+        </div>
+        <div id="view-daemons" class="view" style="display:none">
+            <div class="view-placeholder"><h2>Daemons</h2><p>Loading...</p></div>
+        </div>
+        <div id="view-webhooks" class="view" style="display:none">
+            <div class="view-placeholder"><h2>Webhooks</h2><p>Loading...</p></div>
         </div>
         <div id="view-mind" class="view" style="display:none">
             <div class="view-placeholder">

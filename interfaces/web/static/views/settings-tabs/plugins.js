@@ -85,7 +85,7 @@ const DANGER_PLUGINS = {
 };
 
 // Plugins that own a nav-rail view
-const PLUGIN_NAV_MAP = { continuity: 'schedule' };
+const PLUGIN_NAV_MAP = { continuity: 'triggers' };
 
 // Prevent double-click race condition on toggles
 const toggling = new Set();
