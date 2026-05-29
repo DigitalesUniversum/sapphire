@@ -92,7 +92,7 @@ class StreamingTTSPump:
         # clamps so a typo in settings can't yield zero-size chunks or
         # unbounded buffers.
         min_chars = max(5, int(getattr(config, "TTS_STREAMING_MIN_CHARS", 15) or 15))
-        max_chars = max(min_chars + 5, int(getattr(config, "TTS_STREAMING_MAX_CHARS", 200) or 200))
+        max_chars = max(min_chars + 5, int(getattr(config, "TTS_STREAMING_MAX_CHARS", 750) or 750))
         # Split mode + pause overrides — see Settings → TTS → Streaming.
         # 'paragraph' (default) preserves prosody across sentences;
         # 'sentence' lowers latency at the cost of flatter prosody.

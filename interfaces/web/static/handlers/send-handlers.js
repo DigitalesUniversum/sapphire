@@ -115,6 +115,15 @@ export async function handleSend() {
                     const sawChunks = audio.ttsStreamSawChunk();
                     setTimeout(() => {
                         if (sawChunks) return;
+                        // Turn superseded before this fired — user hit Stop
+                        // (handleStop → cancelStreaming) or sent/replayed again
+                        // (startStreaming). Both bump the stream id, so
+                        // streamStillMine() goes false. Without this, the legacy
+                        // whole-blob audio starts AFTER a Stop, requiring a
+                        // second Stop. The regular (non-streaming) path is the
+                        // common case here, so this has to be rock solid.
+                        // 2026-05-28.
+                        if (!streamStillMine()) return;
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
                             if (el) {

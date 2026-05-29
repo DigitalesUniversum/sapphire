@@ -84,7 +84,7 @@ class SpeechChunker:
     pause_overrides: dict mapping boundary name → ms (overrides PAUSE_AFTER_MS).
     """
 
-    def __init__(self, max_chars: int = 200, min_chars: int = 15,
+    def __init__(self, max_chars: int = 750, min_chars: int = 15,
                  split_mode: str = "paragraph", pause_overrides: Optional[dict] = None,
                  stage_pause_style: str = "comma"):
         self.max_chars = max_chars
@@ -160,7 +160,7 @@ class SpeechChunker:
 
 def chunkify_for_speech(
     token_stream: Iterable[str],
-    max_chars: int = 200,
+    max_chars: int = 750,
     min_chars: int = 15,
     split_mode: str = "paragraph",
     pause_overrides: Optional[dict] = None,
@@ -246,9 +246,15 @@ def _safe_prefix_len(raw: str) -> int:
     if len(fence_positions) % 2 == 1:
         safe = min(safe, fence_positions[-1])
 
-    # Trailing `<` without `>` → partial HTML tag. Hold back.
+    # Trailing `<` without `>` → partial HTML / avatar tag. Hold back.
+    # Back up over a run of consecutive `<` so a doubled opener like the
+    # avatar token `<<avatar:` is held WHOLE — not split into a leaked `<`
+    # (flushed now) plus a buffered remainder that later synthesizes a stray
+    # bracket. Normal prose has no `<<`, so this only affects `<<`-openers.
     last_lt = raw.rfind("<", 0, safe)
     if last_lt >= 0 and raw.find(">", last_lt, safe) < 0:
+        while last_lt > 0 and raw[last_lt - 1] == "<":
+            last_lt -= 1
         safe = min(safe, last_lt)
 
     # Trailing 1-2 backticks could become a triple → hold back
@@ -263,6 +269,15 @@ def _safe_prefix_len(raw: str) -> int:
     return max(0, safe)
 
 
+# Avatar presentation tokens — `<<avatar: track>>`, `<<avatar: track loop>>`,
+# `<<avatar: track once>>`, `<<avatar: track 2.5s>>`. These are a display-layer
+# protocol: the frontend strips them for display and fires the animation; they
+# must NOT reach the synthesizer. Mirrors the frontend scanner regex so TTS
+# strips exactly what display strips. Listed FIRST in _INLINE_PATTERNS so the
+# `<[^>]+>` catch-all below never sees the token and mangles it into a stray
+# `>` that gets spoken. 2026-05-28.
+_AVATAR_RE = re.compile(r"<<avatar:\s*[a-zA-Z0-9_]+(?:\s+(?:once|loop|\d+(?:\.\d+)?s))?>>")
+
 # Inline cleanup for safe-prefix pieces. Block tags should already be
 # handled via safe-prefix gating; these patterns are belt-and-suspenders
 # plus inline markdown handling.
@@ -273,6 +288,7 @@ def _safe_prefix_len(raw: str) -> int:
 # pauses naturally; stripping stars early left stage directions inline with
 # no prosodic cue, which sounded flat.
 _INLINE_PATTERNS = [
+    (_AVATAR_RE, " "),                                      # avatar display tokens
     (re.compile(r"<think>.*?</think>", re.DOTALL), " "),
     (re.compile(r"<reasoning>.*?</reasoning>", re.DOTALL), " "),
     (re.compile(r"<tools>.*?</tools>", re.DOTALL), " "),

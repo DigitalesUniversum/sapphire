@@ -14,8 +14,12 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `post_chat` | After response saved | `input`, `response` | Logging, analytics |
 | `pre_execute` | Before tool call | `function_name`, `arguments` | Modify args, block tools |
 | `post_execute` | After tool call | `function_name`, `result` | Audit, react to results |
-| `pre_tts` | Before speech | `tts_text`, `skip_tts` | Modify text, cancel TTS |
-| `post_tts` | After playback ends | `tts_text` | Analytics, reactions, subtitles |
+| `pre_tts` | Before speech (legacy/whole-blob) | `tts_text`, `skip_tts` | Modify text, cancel TTS |
+| `post_tts` | After playback ends (legacy/whole-blob) | `tts_text` | Analytics, reactions, subtitles |
+| `tts_stream_start` | Streaming TTS: turn begins | `skip_tts` | Disable the whole turn's streaming speech |
+| `tts_chunk_text` | Streaming TTS: per chunk, before synth | `tts_text`, `skip_tts` | Rewrite or mute a chunk before it's voiced |
+| `tts_chunk_audio` | Streaming TTS: per chunk, after synth | `metadata['audio']` carrier | Transform/replace chunk audio bytes |
+| `tts_stream_end` | Streaming TTS: turn ends | — | Finalize captions/recording |
 | `on_wake` | Wakeword detected | — | Play sounds, log, custom reactions |
 
 ### Manifest Declaration
@@ -81,6 +85,10 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `post_execute` | No | Yes | None (observational) |
 | `pre_tts` | No | Yes | `tts_text`, `skip_tts` |
 | `post_tts` | No | Yes | None (observational) |
+| `tts_stream_start` | **Yes** | Yes | `skip_tts` |
+| `tts_chunk_text` | **Yes** | Yes | `tts_text`, `skip_tts` |
+| `tts_chunk_audio` | **Yes** | Yes | `metadata['audio']['audio_bytes']`, `['content_type']` |
+| `tts_stream_end` | **Yes** | Yes | None (observational) |
 | `on_wake` | No | Yes | None (notification only) |
 
 ### What System Access Gives You
@@ -110,6 +118,102 @@ def pre_chat(event):
     if hasattr(system, "tts") and system.tts:
         system.tts.set_voice("af_sky")
 ```
+
+---
+
+## Streaming TTS Hooks
+
+When streaming TTS is enabled (`TTS_STREAMING_ENABLED`) and the active provider
+supports it (Kokoro), the brain synthesizes speech in chunks *while the LLM is
+still generating*. Four hooks let a plugin observe or transform that stream —
+enough to build live captions, an audio recorder, or a lipsync driver.
+
+These fire **only** for streaming-capable providers. Legacy/whole-blob providers
+use `pre_tts` / `post_tts` instead.
+
+### Lifecycle & order (per turn)
+
+```
+tts_stream_start             ── once, before any synth
+  tts_chunk_text   (chunk 0) ── before synth; mutate or skip this chunk
+  tts_chunk_audio  (chunk 0) ── after synth; transform/replace the audio
+  tts_chunk_text   (chunk 1)
+  tts_chunk_audio  (chunk 1)
+  ...
+tts_stream_end               ── once, after the last chunk
+```
+
+`tts_stream_end` fires **exactly once per turn on every exit path** — normal
+completion, forced-final, user Stop, plugin skip-at-start, and connection
+error. Use it to finalize any state you opened in `tts_stream_start`. (Note:
+per-handler error isolation means `tts_stream_end` still fires even if your
+`tts_stream_start` handler raised — don't assume start succeeded.)
+
+### Per-hook contract
+
+| Hook | Mutable | Key metadata |
+|------|---------|--------------|
+| `tts_stream_start` | `skip_tts` (True disables the whole turn's speech) | `voice`, `speed`, `stream_id`, `system` |
+| `tts_chunk_text` | `tts_text` (rewrite; `""`/whitespace mutes this chunk; `skip_tts` skips it) | `chunk_index`, `boundary`, `pause_after_ms`, `stream_id`, `system` |
+| `tts_chunk_audio` | `metadata['audio']['audio_bytes']` and `['content_type']` (the carrier dict; falsy bytes drops the chunk) | `chunk_index`, `chunk_text`, `boundary`, `pause_after_ms`, `stream_id`, `system` |
+| `tts_stream_end` | None (observational) | `chunk_count`, `total_chars`, `interrupted`, `stream_id`, `system` |
+
+`stream_id` is stable across all four hooks for the same turn — use it to
+correlate chunks.
+
+> **Count asymmetry:** `tts_chunk_text` fires for every chunk, but a chunk can
+> be dropped before audio (emoji/punctuation-only, plugin-emptied text, or a
+> synth failure). So `tts_chunk_audio` may fire fewer times than
+> `tts_chunk_text`. Reconcile against `tts_stream_end`'s `chunk_count` (the
+> number actually voiced), not the text-hook count.
+
+### Manifest declaration
+
+```json
+"capabilities": {
+  "hooks": {
+    "tts_stream_start": "hooks/captions.py",
+    "tts_chunk_text": "hooks/captions.py",
+    "tts_stream_end": "hooks/captions.py"
+  }
+}
+```
+
+### Example — live caption log
+
+```python
+# hooks/captions.py
+from core.plugin_loader import plugin_loader
+
+def tts_stream_start(event):
+    plugin_loader.get_plugin_state("captioning").save("buffer", "")
+
+def tts_chunk_text(event):
+    # event.tts_text is the chunk about to be voiced (mutable). metadata
+    # carries chunk_index + boundary if you want to time-align.
+    state = plugin_loader.get_plugin_state("captioning")
+    buf = state.get("buffer", "") + (event.tts_text or "") + " "
+    state.save("buffer", buf)
+
+def tts_stream_end(event):
+    meta = event.metadata
+    print(f"[captions] {meta.get('chunk_count')} chunks voiced, "
+          f"interrupted={meta.get('interrupted')}")
+```
+
+### Transforming chunk audio
+
+`tts_chunk_audio` hands you a mutable carrier at `event.metadata['audio']`:
+
+```python
+def tts_chunk_audio(event):
+    carrier = event.metadata["audio"]   # {'audio_bytes': ..., 'content_type': ...}
+    carrier["audio_bytes"] = transcode_ogg_to_wav(carrier["audio_bytes"])
+    carrier["content_type"] = "audio/wav"
+    # Set carrier['audio_bytes'] to b"" / None to drop this chunk entirely.
+```
+
+The browser honors a per-chunk `content_type`, so you can re-encode on the fly.
 
 ---
 

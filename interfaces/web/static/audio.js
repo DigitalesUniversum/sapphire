@@ -374,7 +374,7 @@ let _ttsStats = null;
 const _newTtsStats = () => ({ received: 0, decoded: 0, played: 0, failed: 0, fails: [] });
 // Record a chunk's terminal outcome exactly once. outcome 'played' or a
 // failure tag ('autoplay-blocked','aborted','play-reject','media-error',
-// 'silent-ended','decode-error').
+// 'silent-ended','silent-stalled','decode-error').
 const _recordChunk = (item, outcome, detail) => {
     if (item && item._recorded) return;
     if (item) item._recorded = true;
@@ -392,7 +392,22 @@ const _dominantFail = (fails) => {
     for (const f of fails) counts[f.outcome] = (counts[f.outcome] || 0) + 1;
     let best = 'unknown', n = 0;
     for (const k in counts) if (counts[k] > n) { n = counts[k]; best = k; }
-    return best;
+    const sample = fails.find(f => f.outcome === best);
+    return { outcome: best, sample: sample && sample.detail ? sample.detail : '' };
+};
+// Compact element/environment snapshot taken at a chunk's terminal moment so a
+// silent-failure paste tells us WHICH silent mode it was — duration=0 (no
+// decodable data), readyState stuck below HAVE_ENOUGH_DATA(4), element muted /
+// zero volume, or the document hidden. Tab-level mute is invisible to JS, but
+// these are the observable proxies that narrow it down. 2026-05-28.
+const _audioDiag = (audio) => {
+    if (!audio) return 'no-element';
+    try {
+        const dur = Number.isFinite(audio.duration) ? audio.duration.toFixed(2) : String(audio.duration);
+        return `rs=${audio.readyState} ns=${audio.networkState} dur=${dur} ` +
+               `ct=${(audio.currentTime || 0).toFixed(2)} vol=${audio.volume} ` +
+               `muted=${audio.muted} hidden=${document.hidden} errcode=${(audio.error && audio.error.code) || '-'}`;
+    } catch (e) { return 'diag-error'; }
 };
 
 const _b64ToBlob = (b64, contentType) => {
@@ -456,7 +471,11 @@ const _ttsStreamMaybeWarnSilent = () => {
     const s = _ttsStats;
     if (!s) return;
     _ttsStats = null;  // consume — fresh stats created by next startTtsStream
-    const reason = s.failed ? ` reason=${_dominantFail(s.fails)}` : '';
+    let reason = '';
+    if (s.failed) {
+        const d = _dominantFail(s.fails);
+        reason = ` reason=${d.outcome}` + (d.sample ? ` [${d.sample}]` : '');
+    }
     console.info(`[TTS-STREAM] turn done: received=${s.received} decoded=${s.decoded} ` +
                  `played=${s.played} failed=${s.failed}${reason}`);
     if (s.received > 0 && s.played === 0) {
@@ -522,7 +541,7 @@ const _ttsStreamPlayNext = (gen) => {
         // clips that may not have fired a timeupdate). Otherwise it ended
         // without ever progressing = silent.
         if (item.audio && item.audio.currentTime > 0) _recordChunk(item, 'played');
-        else _recordChunk(item, 'silent-ended');
+        else _recordChunk(item, 'silent-ended', _audioDiag(item.audio));
         const pause = item.pause_after_ms || 0;
         if (pause > 0) {
             setTimeout(() => _ttsStreamPlayNext(gen), pause);
@@ -533,7 +552,7 @@ const _ttsStreamPlayNext = (gen) => {
     _ttsStreamPlayer.onerror = () => {
         // error.code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED = codec/decode failure
         // (the OGG/Opus-on-hardened-Brave signature).
-        _recordChunk(item, 'media-error', 'code=' + (item.audio?.error?.code));
+        _recordChunk(item, 'media-error', _audioDiag(item.audio));
         // Don't surface to user — keep draining queue
         _ttsStreamPlayNext(gen);
     };
@@ -544,6 +563,30 @@ const _ttsStreamPlayNext = (gen) => {
     // here. The optional-chain guards the rare legacy undefined return.
     _ttsStreamPlayer.play()?.then(() => {
         if (item.audio) item.audio._playStarted = true;
+        // Silent-stall watchdog. play() resolving is NOT proof of sound. If the
+        // element never progresses (currentTime stuck at 0) AND never fires
+        // ended/error within a generous window, it's the silent class the other
+        // tags can't see: duration=0 / no decodable data / decoder refused
+        // without firing error / dead OS sink / tab-muted. That case otherwise
+        // produces a totally silent turn with ZERO log — the worst no-audio
+        // report to debug. Record it with diagnostics and advance so a dead
+        // chunk can't also hang the queue. 2026-05-28.
+        const a = item.audio;
+        const stallMs = (a && Number.isFinite(a.duration) && a.duration > 0)
+            ? a.duration * 1000 + 1500
+            : 3000;
+        setTimeout(() => {
+            if (gen !== _ttsStreamGen) return;            // turn superseded
+            if (!item.audio || item._recorded) return;    // already hit a terminal handler
+            if (item.audio.currentTime > 0) return;       // progressed — onProgress owns it
+            _recordChunk(item, 'silent-stalled', _audioDiag(item.audio));
+            if (_ttsStreamCurrent === item) {
+                // Detach handlers so a late ended/error can't double-advance.
+                item.audio.onended = null;
+                item.audio.onerror = null;
+                _ttsStreamPlayNext(gen);
+            }
+        }, stallMs);
     }).catch(err => {
         // Classify for the turn summary. autoplay/abort stay quiet (recoverable
         // / happen during legitimate stop) but are still recorded so the
@@ -551,7 +594,8 @@ const _ttsStreamPlayNext = (gen) => {
         let tag = 'play-reject';
         if (err?.message?.includes('autoplay') || err?.name === 'NotAllowedError') tag = 'autoplay-blocked';
         else if (err?.name === 'AbortError') tag = 'aborted';
-        _recordChunk(item, tag, err?.message);
+        _recordChunk(item, tag, (err?.name || '') + ' ' + (err?.message || '') +
+                     (item.audio ? ' ' + _audioDiag(item.audio) : ''));
         _ttsStreamPlayNext(gen);
     });
 };
