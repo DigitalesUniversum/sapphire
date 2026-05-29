@@ -1,16 +1,13 @@
 # Plugin Author Guide
 
-## Tools vs Plugins — What's the Difference?
+## What Is a Plugin?
 
-**Tools** live inside the LLM's world. They're functions the AI can call during a conversation — search the web, save a memory, check the weather. The AI decides when to use them. If all you want is to give your AI new abilities it can call, you don't need this guide — [TOOLMAKER.md](../TOOLMAKER.md) covers that. The AI can even create tools for itself at runtime.
+A plugin is a self-contained package that extends Sapphire — a folder with a single `plugin.json` manifest, dropped into `plugins/` (built-in) or `user/plugins/` (yours). It can do far more than add abilities the AI calls; it hooks into parts of the pipeline the LLM never touches:
 
-**Plugins** control everything else.
-
-A plugin is a package that can contain tools, yes, but also hooks into parts of the pipeline the LLM never touches. Plugins can:
-
+- **Add tools** — functions the AI can call during a conversation (search the web, save a memory, control a device)
 - **Intercept voice input** after speech-to-text, before the LLM ever sees it (`post_stt`)
 - **Filter or rewrite the AI's response** before it's saved to history (`post_llm`)
-- **Inject context into the system prompt** every turn, silently (`prompt_inject`) — long-lived state. For per-turn ephemera (time, weather, mood) that should NOT break cache, use `ghost_inject` instead.
+- **Inject context into the system prompt** every turn (`prompt_inject` for long-lived state; `ghost_inject` for cache-friendly per-turn ephemera like time, weather, or mood)
 - **Block or modify tool arguments** before execution (`pre_execute`)
 - **Control TTS** — change the voice, rewrite text, or cancel speech entirely (`pre_tts`)
 - **React to wakeword detection** before recording starts (`on_wake`)
@@ -18,12 +15,15 @@ A plugin is a package that can contain tools, yes, but also hooks into parts of 
 - **Run scheduled tasks** on cron timers, independent of any conversation
 - **Run background daemons** — listen for external events (messages, emails) and trigger AI responses ([guide](daemons.md))
 - **Register voice commands** — keyword triggers that bypass the LLM entirely
-- **Ship a settings UI** that renders in the browser with zero JavaScript (or full custom JS)
+- **Ship a settings UI, a dashboard widget, a full-page app, or a theme**
 
-A tool is a single function the AI can call. A plugin is an autonomous package that can reshape how Sapphire behaves at every stage — input, processing, output, and beyond.
+In short, a plugin is an autonomous package that can reshape how Sapphire behaves at every stage — input, processing, output, and beyond. This guide covers building that whole spectrum.
 
-**If you want to give the AI a new ability** → read [TOOLMAKER.md](../TOOLMAKER.md).
-**If you want to tap into the pipeline itself** → you're in the right place.
+## How Plugins Get Made
+
+- **By hand** — a developer writes the manifest and code. The full toolkit is documented here in this guide.
+- **By a coding agent** — point an agent like Claude Code (see the bundled `claude-code` plugin) at this guide and the codebase, and it can author a complete plugin end to end.
+- **By Toolmaker (one slice)** — Sapphire's built-in [Toolmaker](../TOOLMAKER.md) lets the AI create a **single tool** at runtime. It's deliberately simplified so small local models can use it reliably — it makes one slice (a tool packaged as a minimal plugin), not the full thing. For anything beyond a lone tool — hooks, daemons, providers, UI — you want a real plugin, which is what this guide is for.
 
 ---
 
