@@ -1,7 +1,8 @@
 // views/prompts.js - Prompt editor view (accordion-based inline editing)
 import { listPrompts, getPrompt, getComponents, savePrompt, deletePrompt,
          saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
-import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
+import { PERSONA_TABS } from '../shared/persona-tabs.js';
+import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
@@ -76,7 +77,7 @@ function render() {
     if (!container) return;
 
     container.innerHTML = `
-        ${renderPersonaTabs('prompts', helpPills('Prompts', { video: 'JxgNAk4Y2qI', doc: 'PROMPTS.md', inline: true }))}
+        ${renderSectionTabs(PERSONA_TABS, 'prompts', helpPills('Prompts', { video: 'JxgNAk4Y2qI', doc: 'PROMPTS.md', inline: true }))}
         <div class="prompts-layout">
             <div class="pr-content">
                 <div class="pr-editor">
@@ -289,7 +290,7 @@ function renderPreview() {
 // ── Events ──
 function bindEvents() {
     if (!container) return;
-    bindPersonaTabs(container);
+    bindSectionTabs(container);
     const layout = container.querySelector('.prompts-layout');
     if (!layout) return;
 

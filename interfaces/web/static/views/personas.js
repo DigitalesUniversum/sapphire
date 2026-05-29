@@ -3,7 +3,8 @@ import { listPersonas, getPersona, createPersona, updatePersona, deletePersona,
          duplicatePersona, loadPersona, createFromChat, uploadAvatar, deleteAvatar,
          exportPersona, importPersona,
          avatarUrl, avatarImg, avatarFallback } from '../shared/persona-api.js';
-import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
+import { PERSONA_TABS } from '../shared/persona-tabs.js';
+import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { helpPills } from '../features/video-link.js';
 import { getInitData } from '../shared/init-data.js';
 import {
@@ -129,7 +130,7 @@ function render() {
     const isActive = selectedData?.name === getCurrentPersona();
 
     container.innerHTML = `
-        ${renderPersonaTabs('personas', helpPills('Personas', { video: '5kqW-o35OU4', doc: 'PERSONAS.md', inline: true }))}
+        ${renderSectionTabs(PERSONA_TABS, 'personas', helpPills('Personas', { video: '5kqW-o35OU4', doc: 'PERSONAS.md', inline: true }))}
         <div class="two-panel">
             <div class="panel-left panel-list">
                 <div class="panel-list-header">
@@ -156,7 +157,7 @@ function render() {
         </div>
     `;
 
-    bindPersonaTabs(container);
+    bindSectionTabs(container);
 
     // Mount shared scope dropdowns (Phase 2e) — must run BEFORE bindEvents so the
     // fresh <select> elements get auto-save change listeners. renderScopeDropdowns
