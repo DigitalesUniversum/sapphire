@@ -1,3 +1,5 @@
+# 2.7.3 - Ghost messages in sidebar
+- Add or override ghost message in System Prompt in sidebar
 # 2.7.2 - Refactor UI
 - Persona, Triggers, Mind all use unified layout
 - Scopes for Mind are sidebar now

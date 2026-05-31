@@ -719,6 +719,7 @@ async function loadSidebar() {
         _updateSpeedRange(container, ttsVoicesData);
         setVal(container, '#sb-spice-turns', settings.spice_turns || 3);
         setVal(container, '#sb-custom-context', settings.custom_context || '');
+        setVal(container, '#sb-ghost-context', settings.ghost_context || '');
 
         // Toggle buttons
         setToggle(container, '#sb-spice-toggle', settings.spice_enabled !== false,
@@ -866,6 +867,7 @@ function collectSettings(container) {
         spice_turns: parseInt(getVal(container, '#sb-spice-turns')) || 3,
         inject_datetime: getToggle(container, '#sb-datetime-toggle'),
         custom_context: getVal(container, '#sb-custom-context'),
+        ghost_context: getVal(container, '#sb-ghost-context'),
         llm_primary: getVal(container, '#sb-llm-primary') || 'auto',
         llm_model: getSelectedModel(container),
         trim_color: trimColor,

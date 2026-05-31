@@ -139,6 +139,14 @@ def build_ghost_message(
         if sp_line:
             contributions.append(("(core)", sp_line))
 
+    # Built-in: operator's per-chat ghost override (sidebar "Ghost Message" box).
+    # Overlays onto THIS envelope as one attributed line — never a second ghost
+    # message. Empty → contributes nothing (and if it's the only would-be source,
+    # the `if not contributions` guard below means no ghost message at all).
+    ghost_ctx = (chat_settings.get('ghost_context') or '').strip()
+    if ghost_ctx:
+        contributions.append(("(operator)", ghost_ctx))
+
     # Plugins via ghost_inject hook
     if hook_runner.has_handlers("ghost_inject"):
         ghost_event = HookEvent(

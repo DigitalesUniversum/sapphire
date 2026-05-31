@@ -29,6 +29,7 @@ _STATIC_SYSTEM_DEFAULTS = {
     "spice_set": "default",
     "inject_datetime": False,
     "custom_context": "",
+    "ghost_context": "",        # operator per-turn ghost-message override (sidebar)
     "llm_primary": "auto",      # "auto", "none", or provider key like "claude"
     "llm_model": "",            # Empty = use provider default, or specific model override
     "trim_color": "",
