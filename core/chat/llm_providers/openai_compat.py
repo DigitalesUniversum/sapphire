@@ -651,13 +651,19 @@ class OpenAICompatProvider(BaseProvider):
                     "completion_tokens": chunk.usage.completion_tokens or 0,
                     "total_tokens": chunk.usage.total_tokens or 0
                 }
-                # Some providers include cache stats
+                # Some providers include cache stats. OpenAI/Fireworks report
+                # prompt_tokens INCLUSIVE of cached; normalize to the Anthropic
+                # convention (prompt_tokens = NON-cached input, cached counted
+                # separately) so the shared cache% formula — cache_read /
+                # (prompt + cache_read) — isn't double-counted (which otherwise
+                # caps the displayed hit rate at ~50%). 2026-05-30.
                 cache_read = getattr(chunk.usage, 'prompt_tokens_details', None)
                 if cache_read and hasattr(cache_read, 'cached_tokens'):
                     cached = cache_read.cached_tokens or 0
                     if cached > 0:
                         usage["cache_read_tokens"] = cached
-                        logger.info(f"[CACHE] Stream usage: {cached} cached tokens")
+                        usage["prompt_tokens"] = max(0, usage["prompt_tokens"] - cached)
+                        logger.info(f"[CACHE] Stream usage: {cached} cached of {usage['prompt_tokens'] + cached} prompt tokens")
 
             if not chunk.choices:
                 continue
@@ -785,7 +791,15 @@ class OpenAICompatProvider(BaseProvider):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens
             }
-        
+            # Normalize cached tokens to the Anthropic convention (see streaming
+            # path above) — prompt_tokens = non-cached, cache_read separate.
+            cache_read = getattr(response.usage, 'prompt_tokens_details', None)
+            if cache_read and hasattr(cache_read, 'cached_tokens'):
+                cached = cache_read.cached_tokens or 0
+                if cached > 0:
+                    usage["cache_read_tokens"] = cached
+                    usage["prompt_tokens"] = max(0, usage["prompt_tokens"] - cached)
+
         return LLMResponse(
             content=message_content,
             tool_calls=tool_calls,
